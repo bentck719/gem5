@@ -198,7 +198,7 @@ class SimpleMemory : public AbstractMemory
     void recvFunctional(PacketPtr pkt);
     void recvMemBackdoorReq(const MemBackdoorReq &req,
             MemBackdoorPtr &backdoor);
-    bool recvTimingReq(PacketPtr pkt);
+    virtual bool recvTimingReq(PacketPtr pkt);
     void recvRespRetry();
 };
 

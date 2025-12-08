@@ -28,7 +28,8 @@ struct ChunkNode {
 
 struct HostCacheEntry {};
 
-class CxlSSD : public SimpleMemory // 繼承 SimpleMemory 以支援 TrafficGen
+// Inherit SimpleMemory for TrafficGen
+class CxlSSD : public SimpleMemory
 {
   private:
     // Cxl Parameter
@@ -47,18 +48,22 @@ class CxlSSD : public SimpleMemory // 繼承 SimpleMemory 以支援 TrafficGen
     const uint8_t thresholdIsolated;
     const uint8_t thresholdDistributed;
 
-    const Tick transferPenalty4KB = 131000; // 131 ns
-    const Tick transfetPenalty256B = 8000;  // 8ns
-  
     FIFOQueue<Addr, ClassifyNode> classifyQueue; // Key: Page Aligned Addr
     FIFOQueue<Addr, ChunkNode> storeQueue;       // Key: Chunk Aligned Addr
     FIFOQueue<Addr, ChunkNode> dirtyQueue;       // Key: Chunk Aligned Addr
-
+    
     FIFOQueue<Addr, HostCacheEntry> hostCache;   // Implement LRU logic in FIFOQueue
+    
+    const Tick transferPenalty4KB = 131000; // 131 ns
 
     // --- Helper ---
     void moveToHost(Addr pageAddr); // Migration logic
-    Tick anomalyHandler(Addr pageAddr, Addr chunkAddr, int chunkIdx, ClassifyNode* cNode, ChunkNode* sNode);
+    void moveToDirty(Addr chunkAddr);
+    void moveToStore(std::optional<std::pair<Addr, ClassifyNode>>& victim);
+    std::optional<std::pair<Addr, ClassifyNode>> insertToClassify(Addr pageAddr, Addr chunkAddr, int chunkIdx, bool isWrite);
+    void handleLargeAccess(Addr pageAddr);
+    Tick handleCNode(Addr pageAddr, Addr chunkAddr, int chunkIdx, bool isWrite);
+    Tick handleSNode(Addr chunkAddr, int chunkIdx, bool isWrite);
 
   public:
     using Params = CxlSSDParams;

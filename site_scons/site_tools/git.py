@@ -55,55 +55,7 @@ Press enter to continue, or ctrl-c to abort:
 
 
 def install_style_hooks(env):
-    try:
-        gitdir = env.Dir(
-            gem5_scons.util.readCommand(
-                ["git", "rev-parse", "--git-common-dir"]
-            ).strip("\n")
-        )
-    except Exception as e:
-        print(f"Warning: Failed to find git repo directory: {e}")
-        return
-
-    git_hooks = gitdir.Dir("hooks")
-
-    def hook_exists(hook_name):
-        hook = git_hooks.File(hook_name)
-        return hook.exists()
-
-    if hook_exists("pre-commit") and hook_exists("commit-msg"):
-        return
-
-    print(git_style_message, end=" ")
-    if SCons.Script.GetOption("install_hooks"):
-        print("Installing revision control hooks automatically.")
-    else:
-        try:
-            input()
-        except:
-            print("Input exception, exiting scons.\n")
-            sys.exit(1)
-
-    pre_commit_install = env.Dir("#util").File("pre-commit-install.sh")
-
-    ret = subprocess.call(str(pre_commit_install), shell=True)
-    if ret != 0:
-        print(
-            "It is strongly recommended you install the pre-commit hooks "
-            "before working with gem5. Do you want to continue compilation "
-            "(y/n)?"
-        )
-        while True:
-            response = input().lower().strip()
-            if response in {"yes", "ye", "y"}:
-                return
-            elif response in {"no", "n"}:
-                sys.exit(1)
-            else:
-                print(
-                    f"Could not parse answer '{response}'. Do you want to "
-                    "continue compilation (y/n)?"
-                )
+    return
 
 
 def generate(env):

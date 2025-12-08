@@ -19,7 +19,15 @@ CxlSSD::CxlSSD(const Params &p)
       dirtyQueue(cxlDramSize / CXL_MEM_CHUNK_SIZE / 4),
       hostCache(hostDramSize / CXL_SSD_PAGE_SIZE)
 {
-    DPRINTF(CxlSSD, "CxlSSD Initialized with FIFO Queues\n");
+    DPRINTF(CxlSSD, "CxlSSD Parameters:\n");
+    DPRINTF(CxlSSD, "  CXL Latency: %lu\n", cxlLatency);
+    DPRINTF(CxlSSD, "  CXL Bandwidth: %lu\n", cxlBandwidth);
+    DPRINTF(CxlSSD, "  CXL DRAM Size: %lu\n", cxlDramSize);
+    DPRINTF(CxlSSD, "  SSD Latency: %lu\n", ssdLatency);
+    DPRINTF(CxlSSD, "  Host Latency: %lu\n", hostLatency);
+    DPRINTF(CxlSSD, "  Host DRAM Size: %lu\n", hostDramSize);
+    DPRINTF(CxlSSD, "  Threshold Isolated: %u\n", thresholdIsolated);
+    DPRINTF(CxlSSD, "  Threshold Distributed: %u\n", thresholdDistributed);
 }
 
 void CxlSSD::moveToHost(Addr pageAddr) {
@@ -40,9 +48,41 @@ void CxlSSD::moveToHost(Addr pageAddr) {
 }
 
 void CxlSSD::moveToDirty(Addr chunkAddr) {
-    ChunkNode* dNode;
+    ChunkNode dNode;
     dirtyQueue.Insert(chunkAddr, dNode);
-    return;
+}
+
+void CxlSSD::moveToStore(std::optional<std::pair<Addr, ClassifyNode>>& victim) {
+    Addr victimAddr = victim->first;
+    ClassifyNode& victimNode = victim->second;
+
+    DPRINTF(CxlSSD, "Classify Eviction: Page %#x. Moving valid chunks to Store.\n", victimAddr);
+
+    for (int i = 0; i < CXL_MEM_CHUNKS_PER_PAGE; i++) {
+        // If the Chunk is written, it is in the dirty queue
+        if (victimNode.dirty_bitmap.test(i)) continue;
+
+        Addr chunkAddr = victimAddr + (i * CXL_MEM_CHUNK_SIZE);
+        // Move Accessed Chunk to the store queue
+        if (victimNode.chunk_bitmap.test(i)) {
+            ChunkNode sNode;
+            sNode.access_count = victimNode.access_counts[i];
+            storeQueue.Insert(chunkAddr, sNode);
+        }
+    }
+}
+
+std::optional<std::pair<Addr, ClassifyNode>> CxlSSD::insertToClassify(Addr pageAddr, Addr chunkAddr, int chunkIdx, bool isWrite) {
+    ClassifyNode newNode;
+    newNode.chunk_bitmap.set(chunkIdx);
+    newNode.access_counts[chunkIdx] = 1;
+
+    if (isWrite) {
+        moveToDirty(chunkAddr);
+        newNode.dirty_bitmap.set(chunkIdx);
+    }
+    
+    return classifyQueue.Insert(pageAddr, newNode);
 }
 
 // Large Access: SSD -> Host Cache
@@ -63,11 +103,15 @@ Tick CxlSSD::handleCNode(Addr pageAddr, Addr chunkAddr, int chunkIdx, bool isWri
     cNode->access_counts[chunkIdx]++;
     if (cNode->chunk_bitmap.count() > thresholdDistributed) migrate = true;
     if (cNode->access_counts[chunkIdx] > thresholdIsolated) migrate = true;
-    if (migrate) migratedLatency = transferPenalty4KB;
 
-    if (isWrite) {
+    if (migrate) {
+        moveToHost(pageAddr);
+        migratedLatency = transferPenalty4KB;
+    }
+    else if (isWrite) {
         moveToDirty(chunkAddr);
         cNode->dirty_bitmap.set(chunkIdx);
+        migratedLatency = cxlLatency;
     }
 
     return migratedLatency;
@@ -75,29 +119,24 @@ Tick CxlSSD::handleCNode(Addr pageAddr, Addr chunkAddr, int chunkIdx, bool isWri
 
 // Store Node: Handle anomaly and move the dirty chunk into the dirty queue.
 Tick CxlSSD::handleSNode(Addr chunkAddr, int chunkIdx, bool isWrite) {
-    bool migrate = false;
     Tick migratedLatency = 0;
     ChunkNode* sNode = storeQueue.Get(chunkAddr);
 
     // Handle Anomaly
     sNode->access_count++;
-    if (sNode->access_count > thresholdIsolated) migrate = true;
-    if (migrate) migrateLatency = transferPenalty4KB + ssdLatency;
 
-    if (isWrite) {
+    if (sNode->access_count > thresholdIsolated) {
+        Addr pageAddr = chunkAddr & ~(CXL_SSD_PAGE_SIZE - 1);
+        moveToHost(pageAddr);
+        migratedLatency = transferPenalty4KB + ssdLatency;
+    } 
+    else if (isWrite) {
         moveToDirty(chunkAddr);
         storeQueue.Remove(chunkAddr);
+        migratedLatency = cxlLatency;
     }
 
     return migratedLatency;
-}
-
-std::optional<std::pair<Addr, ClassifyNode>> CxlSSD::insertToClassify(Addr pageAddr, int chunkIdx) {
-    ClassifyNode newNode;
-    newNode.chunk_bitmap.set(chunkIdx);
-    newNode.access_counts[chunkIdx] = 1;
-    
-    return classifyQueue.Insert(pageAddr, newNode);
 }
 
 bool CxlSSD::recvTimingReq(PacketPtr pkt) {
@@ -106,31 +145,22 @@ bool CxlSSD::recvTimingReq(PacketPtr pkt) {
     bool isWrite = pkt->isWrite();
 
     Addr pageAddr = addr & ~(CXL_SSD_PAGE_SIZE - 1);
+    Addr pageAddrEnd = (addr + size - 1) & ~(CXL_SSD_PAGE_SIZE - 1);
     Addr chunkAddr = addr & ~(CXL_MEM_CHUNK_SIZE - 1);
+    Addr chunkAddrEnd = (addr + size - 1) & ~(CXL_MEM_CHUNK_SIZE - 1);
     int chunkIdx = (addr % CXL_SSD_PAGE_SIZE) / CXL_MEM_CHUNK_SIZE;
-    int endIdx = ((addr + size - 1) % CXL_SSD_PAGE_SIZE) / CXL_MEM_CHUNK_SIZE;
-
-    bool migrate = false;
     
-    Tick addedLatency = -latency;
+    Tick addedLatency = 0;
 
-    // 1. Check Host Cache (HSPC)
-    if (hostCache.Contains(pageAddr)) {
-        hostCache.Remove(pageAddr);
-        hostCache.Insert(pageAddr, HostCacheEntry());
-        DPRINTF(CxlSSD, "Hit in Host Cache: %#x\n", addr);
-        return SimpleMemory::recvTimingReq(pkt);
-    }
-
-    // 1-1. Miss in HSPC, but Cross Chunks Access -> Large IO
-    if (chunkIdx != endIdx) {
+    // Miss in HSPC, but Cross Chunks Access -> Large IO
+    if (pageAddr != pageAddrEnd || chunkAddr != chunkAddrEnd) {
         handleLargeAccess(pageAddr);
-        DPRINTF(CxlSSD, "Cross Chunks Access: %#x - %#x\n", chunkIdx, endIdx);
+        handleLargeAccess(pageAddrEnd);
+        DPRINTF(CxlSSD, "Cross Pages/Chunks Access: Page Addr: %#llx - %#llx, Chunk Addr: %#llx - %#llx\n", pageAddr, pageAddrEnd, chunkAddr, chunkAddrEnd);
         return SimpleMemory::recvTimingReq(pkt);
     }
 
-    // 2. Check Device Cache (HAIPC)
-    // 2-1. Check Dirty Node
+    // Check Dirty Node
     ChunkNode* dNode = dirtyQueue.Get(chunkAddr);
     if (dNode) {
         addedLatency += cxlLatency;
@@ -139,7 +169,16 @@ bool CxlSSD::recvTimingReq(PacketPtr pkt) {
         return SimpleMemory::recvTimingReq(pkt);
     }
 
-    // 2-2. Check Classify Node
+    // Check Host Cache (HSPC)
+    if (hostCache.Contains(pageAddr)) {
+        hostCache.Remove(pageAddr);
+        hostCache.Insert(pageAddr, HostCacheEntry());
+        DPRINTF(CxlSSD, "Hit in Host Cache: %#x\n", addr);
+        return SimpleMemory::recvTimingReq(pkt);
+    }
+
+    // Check Device Cache (HAIPC)
+    // Check Classify Node
     ClassifyNode* cNode = classifyQueue.Get(pageAddr);
     if (cNode) {
         addedLatency += handleCNode(pageAddr, chunkAddr, chunkIdx, isWrite);
@@ -148,7 +187,7 @@ bool CxlSSD::recvTimingReq(PacketPtr pkt) {
         return SimpleMemory::recvTimingReq(pkt);
     }
 
-    // 2-3. Check Store Node
+    // Check Store Node
     ChunkNode* sNode = storeQueue.Get(chunkAddr);
     if (sNode) {
         addedLatency += handleSNode(chunkAddr, chunkIdx, isWrite);
@@ -157,40 +196,27 @@ bool CxlSSD::recvTimingReq(PacketPtr pkt) {
         return SimpleMemory::recvTimingReq(pkt);
     }
 
-    // 3. Cache Miss (Flash Access)    
+    // Cache Miss (Flash Access)    
+    // Large Access: SSD -> Host Cache
     if (pkt->getSize() > CXL_LARGE_ACCESS_THRESHOLD) {
-        // Large Access: SSD -> Host Cache
         handleLargeAccess(pageAddr);
         DPRINTF(CxlSSD, "Miss (Large Access): %#x\n", addr);
     } 
     else {
         // Small Access -> Classify Area
-        auto victim = insertToClassify(pageAddr, chunkIdx);
+        std::optional<std::pair<Addr, ClassifyNode>> victim = insertToClassify(pageAddr, chunkAddr, chunkIdx, isWrite);
         
-        // If Classify Area 
+        // Classify Full -> Move to Store Area
         if (victim.has_value()) {
-            // 取出 Key (first) 和 Value (second)
-            Addr victimAddr = victim->first;
-            ClassifyNode& victimNode = victim->second;
-
-            DPRINTF(CxlSSD, "Classify Eviction: Page %#x. Moving valid chunks to Store.\n", victimAddr);
-
-            for (int i = 0; i < CXL_MEM_CHUNKS_PER_PAGE; i++) {
-                if (victimNode.chunk_bitmap.test(i)) {
-                    Addr chunkAddr = victimAddr + (i * CXL_MEM_CHUNK_SIZE);
-                    
-                    ChunkNode sNode;
-                    sNode.access_count = victimNode.access_counts[i];
-                    storeQueue.Insert(chunkAddr, sNode);
-                }
-            }
+            moveToStore(victim);
         }
+
+        addedLatency += cxlLatency;
     }
     
     addedLatency += ssdLatency;
     pkt->headerDelay += addedLatency;
 
-    // Let SimpleMemory handle the rest
     return SimpleMemory::recvTimingReq(pkt);
 }
 

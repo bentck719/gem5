@@ -8,11 +8,11 @@ class CxlSSD(SimpleMemory):
 
     # Cxl Parameter
     cxl_latency = Param.Latency('100ns', "CXL Link Latency")
-    cxl_bandwidth = Param.MemoryBandwidth('32GB/s', "CXL Bandwidth")
+    cxl_bandwidth = Param.MemoryBandwidth('32GiB/s', "CXL Bandwidth")
     cxl_dram_size  = Param.MemorySize('2GiB', "In-device Memory Size")
 
     # SSD Parameter
-    ssd_latency = Param.Latency('10us', "Flash Read Latency")
+    ssd_latency = Param.Latency('10000ns', "Flash Read Latency")
 
     # Host DRAM Parameter
     # Refer to SimpleMemory.py for Host DRAM Latency and Bandwidth
