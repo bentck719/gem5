@@ -12,7 +12,7 @@ class CxlSSD(SimpleMemory):
     cxl_dram_size  = Param.MemorySize('2GiB', "In-device Memory Size")
 
     # SSD Parameter
-    ssd_latency = Param.Latency('10000ns', "Flash Read Latency")
+    ssd_latency = Param.Latency('10us', "Flash Read Latency")
 
     # Host DRAM Parameter
     # Refer to SimpleMemory.py for Host DRAM Latency and Bandwidth
@@ -22,3 +22,6 @@ class CxlSSD(SimpleMemory):
     # Anomaly Detector Parameter
     threshold_isolated = Param.Int(8, "Threshold for Isolated Hotspot")
     threshold_distributed = Param.Int(4, "Threshold for Distributed Hotspots")
+
+    cxl_large_access_threshold = Param.Int(256, "Large Access Threshold")
+

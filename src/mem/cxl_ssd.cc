@@ -1,5 +1,6 @@
 #include "mem/cxl_ssd.hh"
-#include "debug/CxlSSD.hh" // 記得註冊 Debug Flag
+#include "debug/CxlSSD.hh"
+#include "debug/CxlSSDConfig.hh"
 
 namespace gem5 {
 namespace memory {
@@ -14,20 +15,22 @@ CxlSSD::CxlSSD(const Params &p)
       hostDramSize(p.host_dram_size),
       thresholdIsolated(p.threshold_isolated),
       thresholdDistributed(p.threshold_distributed),
+      cxlLargeAccessThreshold(p.cxl_large_access_threshold),
       classifyQueue(cxlDramSize / CXL_SSD_PAGE_SIZE / 2),
       storeQueue(cxlDramSize / CXL_MEM_CHUNK_SIZE / 4),
       dirtyQueue(cxlDramSize / CXL_MEM_CHUNK_SIZE / 4),
       hostCache(hostDramSize / CXL_SSD_PAGE_SIZE)
 {
-    DPRINTF(CxlSSD, "CxlSSD Parameters:\n");
-    DPRINTF(CxlSSD, "  CXL Latency: %lu\n", cxlLatency);
-    DPRINTF(CxlSSD, "  CXL Bandwidth: %lu\n", cxlBandwidth);
-    DPRINTF(CxlSSD, "  CXL DRAM Size: %lu\n", cxlDramSize);
-    DPRINTF(CxlSSD, "  SSD Latency: %lu\n", ssdLatency);
-    DPRINTF(CxlSSD, "  Host Latency: %lu\n", hostLatency);
-    DPRINTF(CxlSSD, "  Host DRAM Size: %lu\n", hostDramSize);
-    DPRINTF(CxlSSD, "  Threshold Isolated: %u\n", thresholdIsolated);
-    DPRINTF(CxlSSD, "  Threshold Distributed: %u\n", thresholdDistributed);
+    DPRINTF(CxlSSDConfig, "CxlSSD Parameters:\n");
+    DPRINTF(CxlSSDConfig, "  CXL Latency: %lu\n", cxlLatency);
+    DPRINTF(CxlSSDConfig, "  CXL Bandwidth: %llf\n", cxlBandwidth);
+    DPRINTF(CxlSSDConfig, "  CXL DRAM Size: %llu\n", cxlDramSize);
+    DPRINTF(CxlSSDConfig, "  SSD Latency: %lu\n", ssdLatency);
+    DPRINTF(CxlSSDConfig, "  Host Latency: %lu\n", hostLatency);
+    DPRINTF(CxlSSDConfig, "  Host DRAM Size: %llu\n", hostDramSize);
+    DPRINTF(CxlSSDConfig, "  Threshold Isolated: %u\n", thresholdIsolated);
+    DPRINTF(CxlSSDConfig, "  Threshold Distributed: %u\n", thresholdDistributed);
+    DPRINTF(CxlSSDConfig, "  Large Access Threshold: %u\n", cxlLargeAccessThreshold);
 }
 
 void CxlSSD::moveToHost(Addr pageAddr) {
@@ -198,7 +201,7 @@ bool CxlSSD::recvTimingReq(PacketPtr pkt) {
 
     // Cache Miss (Flash Access)    
     // Large Access: SSD -> Host Cache
-    if (pkt->getSize() > CXL_LARGE_ACCESS_THRESHOLD) {
+    if (pkt->getSize() > cxlLargeAccessThreshold) {
         handleLargeAccess(pageAddr);
         DPRINTF(CxlSSD, "Miss (Large Access): %#x\n", addr);
     } 
@@ -209,9 +212,11 @@ bool CxlSSD::recvTimingReq(PacketPtr pkt) {
         // Classify Full -> Move to Store Area
         if (victim.has_value()) {
             moveToStore(victim);
+            DPRINTF(CxlSSD, "Miss (Move to Store): %#x\n", addr);
         }
 
         addedLatency += cxlLatency;
+        DPRINTF(CxlSSD, "Miss (Small Access): %#x\n", addr);
     }
     
     addedLatency += ssdLatency;

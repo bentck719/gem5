@@ -171,4 +171,5 @@ DebugFlag("QOS")
 #  CxlSSD models
 SimObject('CxlSSD.py', sim_objects=['CxlSSD'])
 Source('cxl_ssd.cc')
+DebugFlag('CxlSSDConfig')
 DebugFlag('CxlSSD')

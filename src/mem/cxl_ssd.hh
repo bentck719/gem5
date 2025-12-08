@@ -12,7 +12,6 @@ namespace memory {
 constexpr uint32_t CXL_SSD_PAGE_SIZE = 4096;  // 4KiB
 constexpr uint32_t CXL_MEM_CHUNK_SIZE = 256;  // 256B
 constexpr uint32_t CXL_MEM_CHUNKS_PER_PAGE = CXL_SSD_PAGE_SIZE / CXL_MEM_CHUNK_SIZE;
-constexpr uint32_t CXL_LARGE_ACCESS_THRESHOLD = 256;
 
 struct ClassifyNode {
     std::bitset<CXL_MEM_CHUNKS_PER_PAGE> chunk_bitmap;
@@ -35,18 +34,20 @@ class CxlSSD : public SimpleMemory
     // Cxl Parameter
     const Tick cxlLatency;
     const double cxlBandwidth;
-    const int cxlDramSize;
+    const size_t cxlDramSize;
 
     // SSD Parameter
     const Tick ssdLatency;
 
     // Host DRAM Parameter
     const Tick hostLatency;
-    const int hostDramSize;
+    const size_t hostDramSize;
 
     // Anomaly Detector Parameter
     const uint8_t thresholdIsolated;
     const uint8_t thresholdDistributed;
+
+    const uint16_t cxlLargeAccessThreshold;
 
     FIFOQueue<Addr, ClassifyNode> classifyQueue; // Key: Page Aligned Addr
     FIFOQueue<Addr, ChunkNode> storeQueue;       // Key: Chunk Aligned Addr
