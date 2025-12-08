@@ -9,18 +9,20 @@
 namespace gem5 {
 namespace memory {
 
-#define CXL_SSD_PAGE_SIZE       4096  // 4KiB
-#define CXL_MEM_CHUNK_SIZE      256   // 256B
-#define CXL_MEM_CHUNKS_PER_PAGE 16
+constexpr uint32_t CXL_SSD_PAGE_SIZE = 4096;  // 4KiB
+constexpr uint32_t CXL_MEM_CHUNK_SIZE = 256;  // 256B
+constexpr uint32_t CXL_MEM_CHUNKS_PER_PAGE = CXL_SSD_PAGE_SIZE / CXL_MEM_CHUNK_SIZE;
+constexpr uint32_t CXL_LARGE_ACCESS_THRESHOLD = 256;
 
 struct ClassifyNode {
-    std::bitset<16> chunk_bitmap;
-    std::vector<uint8_t> access_counts;
-    ClassifyNode() : access_counts(16, 0) {}
+    std::bitset<CXL_MEM_CHUNKS_PER_PAGE> chunk_bitmap;
+    std::bitset<CXL_MEM_CHUNKS_PER_PAGE> dirty_bitmap;
+    std::vector<uint16_t> access_counts;
+    ClassifyNode() : access_counts(CXL_MEM_CHUNKS_PER_PAGE, 0) {}
 };
 
 struct ChunkNode {
-    uint8_t access_count;
+    uint16_t access_count;
     ChunkNode() : access_count(0) {}
 };
 
