@@ -1,13 +1,25 @@
 import m5
 from m5.objects import *
 from gen_ycsb_trace import create_ycsb_cfg
+import argparse
 
-workload = "A"
+parser = argparse.ArgumentParser(description="CXL SSD memory tester")
+parser.add_argument("--workload", default="A", help="YCSB Workload type (A-F)")
+parser.add_argument("--workload_mode", default="RANDOM", help="YCSB Workload mode (e.g., RANDOM, SEQ)")
+parser.add_argument("--size", type=int, default=10, help="Size of the memory region in GiB")
+parser.add_argument("--host_dram_size", type=str, default='6GiB', help="Size of the host DRAM in the CXL SSD")
+parser.add_argument("--lat", type=int, default=256, help="CXL large access threshold in bytes")
+args = parser.parse_args()
+
+workload = args.workload
+workload_mode = args.workload_mode
 base_addr = 0
-size = 10 * 1024**3
+host_dram_size = args.host_dram_size
+size = args.size * 1024**3
+lat = args.lat
 
 cfg_filename = f"ycsb_{workload.lower()}_smart.cfg"
-create_ycsb_cfg(cfg_filename, workload, base_addr, size)
+create_ycsb_cfg(cfg_filename, workload, workload_mode, base_addr, size)
 
 cpu = TrafficGen(config_file=cfg_filename)
 
@@ -15,11 +27,15 @@ system = System(
     cpu=cpu,
     membus=IOXBar(width=16),
     mem_ranges=[AddrRange(base_addr, base_addr+size)],
-    clk_domain=SrcClockDomain(clock='2GHz', voltage_domain=VoltageDomain()),
+    clk_domain=SrcClockDomain(clock='1GHz', voltage_domain=VoltageDomain()),
     physmem=CxlSSD(
         range = AddrRange(base_addr, base_addr+size),
-        latency = "0",
-        bandwidth = "32GiB/s"
+        # latency = "0",
+        bandwidth = "32GiB/s",
+        cxl_bandwidth = "32GiB/s",
+        host_dram_size = host_dram_size,
+        ssd_latency = "10us",
+        cxl_large_access_threshold = lat
     )
 )
 

@@ -28,8 +28,7 @@ struct ChunkNode {
 struct HostCacheEntry {};
 
 // Inherit SimpleMemory for TrafficGen
-class CxlSSD : public SimpleMemory
-{
+class CxlSSD : public SimpleMemory {
   private:
     // Cxl Parameter
     const Tick cxlLatency;
@@ -38,6 +37,7 @@ class CxlSSD : public SimpleMemory
 
     // SSD Parameter
     const Tick ssdLatency;
+    const Tick transferPenalty4KB; // 131 ns
 
     // Host DRAM Parameter
     const Tick hostLatency;
@@ -55,7 +55,6 @@ class CxlSSD : public SimpleMemory
     
     FIFOQueue<Addr, HostCacheEntry> hostCache;   // Implement LRU logic in FIFOQueue
     
-    const Tick transferPenalty4KB = 131000; // 131 ns
 
     // --- Helper ---
     void moveToHost(Addr pageAddr); // Migration logic

@@ -11,6 +11,7 @@ CxlSSD::CxlSSD(const Params &p)
       cxlBandwidth(p.cxl_bandwidth),
       cxlDramSize(p.cxl_dram_size),
       ssdLatency(p.ssd_latency),
+      transferPenalty4KB(p.transfer_penalty4KB),
       hostLatency(p.host_latency),
       hostDramSize(p.host_dram_size),
       thresholdIsolated(p.threshold_isolated),
@@ -199,27 +200,30 @@ bool CxlSSD::recvTimingReq(PacketPtr pkt) {
         return SimpleMemory::recvTimingReq(pkt);
     }
 
-    // Cache Miss (Flash Access)    
+    // Cache Miss (Flash Access)
+    addedLatency += ssdLatency;
+
     // Large Access: SSD -> Host Cache
     if (pkt->getSize() > cxlLargeAccessThreshold) {
         handleLargeAccess(pageAddr);
+        addedLatency += transfer_penalty4KB;
+        pkt->headerDelay += addedLatency;
         DPRINTF(CxlSSD, "Miss (Large Access): %#x\n", addr);
+        return SimpleMemory::recvTimingReq(pkt);
     } 
-    else {
-        // Small Access -> Classify Area
-        std::optional<std::pair<Addr, ClassifyNode>> victim = insertToClassify(pageAddr, chunkAddr, chunkIdx, isWrite);
-        
-        // Classify Full -> Move to Store Area
-        if (victim.has_value()) {
-            moveToStore(victim);
-            DPRINTF(CxlSSD, "Miss (Move to Store): %#x\n", addr);
-        }
-
-        addedLatency += cxlLatency;
-        DPRINTF(CxlSSD, "Miss (Small Access): %#x\n", addr);
-    }
     
-    addedLatency += ssdLatency;
+    // Small Access -> Classify Area
+    addedLatency += cxlLatency;
+    std::optional<std::pair<Addr, ClassifyNode>> victim = insertToClassify(pageAddr, chunkAddr, chunkIdx, isWrite);
+    
+    // Classify Full -> Move to Store Area
+    if (victim.has_value()) {
+        moveToStore(victim);
+        DPRINTF(CxlSSD, "Miss (Move to Store): %#x\n", addr);
+    }
+
+    DPRINTF(CxlSSD, "Miss (Small Access): %#x\n", addr);
+    
     pkt->headerDelay += addedLatency;
 
     return SimpleMemory::recvTimingReq(pkt);
