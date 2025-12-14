@@ -6,9 +6,18 @@
 #include "base/addr_range.hh"
 #include "mem/xbar.hh"
 #include "params/CXLController.hh"
+#include "mem/fifo_queue.hh"
+#include "mem/packet.hh"
 
 namespace gem5
 {
+struct CXLExtraInfo : public Packet::SenderState {
+    bool needMigration;
+    int anomalyType;
+
+    CXLExtraInfo() : needMigration(false), anomalyType(0) {}
+};
+
 class CXLController : public BaseXBar
 {
 public:
@@ -155,6 +164,18 @@ private:
     std::vector<int> DataCrd;
     std::vector<AddrRange *> addr;
     unsigned last_rollover;
+
+    // Host DRAM Parameter
+    const size_t pageSize = 4096; 
+    const size_t cxlChunkSize;
+    const Tick hostLatency;
+    const size_t hostDramSize;
+    uint16_t cxlLargeAccessThreshold;
+    
+    struct HostCacheEntry {};
+    gem5::memory::FIFOQueue<Addr, HostCacheEntry> hostCache;
+    void handleLargeAccess(Addr pageAddr);
+
     void mkReadPkt(PacketPtr pkt, PortID port_id);
     void mkWritePkt(PacketPtr pkt, PortID port_id);
 };

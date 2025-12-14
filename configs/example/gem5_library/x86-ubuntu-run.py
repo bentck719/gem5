@@ -151,16 +151,21 @@ board.pciexbar2.mem_side_ports = sl4.cpu_side_port
 sl4.mem_side_port = board.cxl_device2.cpu_side_ports
 
 # Memory controller setup with adjusted ranges
-board.mem_ctrl = MemCtrl()
-mc = board.mem_ctrl
-mc.dram = DDR3_1600_8x8()
-mc.dram.range = AddrRange(start="0x440000000", size="512MiB")  # Match slar
-mc.port = board.cxl_device.mem_side_ports
+# board.mem_ctrl = MemCtrl()
+# mc = board.mem_ctrl
+# mc.dram = DDR3_1600_8x8()
+# mc.dram.range = AddrRange(start="0x440000000", size="512MiB")  # Match slar
+# mc.port = board.cxl_device.mem_side_ports
+
+system.cxl_ssd1 = CxlSSD(
+    range = slar
+)
+system.cxl_ssd1.port = system.cxl_device.mem_side_ports
 
 board.mem_ctrl2 = MemCtrl()
 mc2 = board.mem_ctrl2
 mc2.dram = DDR3_1600_8x8()
-mc2.dram.range = AddrRange(start="0x460000000", size="512MiB")  # Match slar2
+mc2.dram.range = slar2 # Match slar2
 board.cxl_device2.mem_side_ports = mc2.port
 
 

@@ -8,11 +8,19 @@
 #include "debug/CXLController.hh"
 #include "debug/CXLPerf.hh"
 #include "mem/cxl_protocol.hh"
+#include "mem/fifo_queue.hh"
+
+
 
 namespace gem5
 {
 CXLController::CXLController(const CXLControllerParams* p) :
-    BaseXBar(*p)
+    BaseXBar(*p),
+    cxlChunkSize(p->cxlChunkSize),
+    hostLatency(p->hostLatency),
+    hostDramSize(p->hostDramSize),
+    cxlLargeAccessThreshold(p->cxlLargeAccessThreshold),
+    hostCache(hostDramSize / pageSize)
 {
     // create the ports based on the size of the memory-side port and
     // CPU-side port vector ports, and the presence of the default port,
@@ -79,9 +87,44 @@ CXLControllerParams::create() const
     return new CXLController(this);
 }
 
+void CXLController::handleLargeAccess(Addr pageAddr) {
+    HostCacheEntry victim;
+    hostCache.Insert(pageAddr, victim);
+    return;
+}
+
 bool CXLController::recvTimingReq(PacketPtr pkt, PortID cpu_side_port_id){
-    // determine the source port based on the id
     ResponsePort *src_port = cpuSidePorts[cpu_side_port_id];
+    
+    // [Bi-Tiered] 
+    // Check Host Cache (HSPC)
+    uint32_t size = pkt->getSize();
+    Addr addr = pkt->getAddr();
+    Addr pageAddr = addr & ~(pageSize - 1);
+    Addr pageAddrEnd = (addr + size - 1) & ~(pageSize - 1);
+    bool allInHost = true;
+
+    for (Addr iterAddr = pageAddr; iterAddr <= pageAddrEnd; iterAddr += pageSize) {
+        if (hostCache.Contains(iterAddr)) {
+            hostCache.Remove(iterAddr);
+            hostCache.Insert(iterAddr, HostCacheEntry());
+        }
+        else {
+            allInHost = false;
+        }
+    }
+
+    if (allInHost) {
+        pkt->makeResponse();
+        Tick latency = clockEdge(Cycles(1)) + hostLatency; 
+        cpuSidePorts[cpu_side_port_id]->schedTimingResp(pkt, curTick() + latency);
+        return true; 
+    }
+    
+    CXLExtraInfo* cxlInfo = new CXLExtraInfo();
+    pkt->pushSenderState(cxlInfo);
+
+    // determine the source port based on the id
 
     // we should never see express snoops on a non-coherent crossbar
     assert(!pkt->isExpressSnoop());
@@ -113,7 +156,6 @@ bool CXLController::recvTimingReq(PacketPtr pkt, PortID cpu_side_port_id){
     DPRINTF(CXLController, "recvTimingReq: src %s %s 0x%x %d\n",
             src_port->name(), pkt->cmdString(),
             pkt->getAddr(), pkt->getSize());
-
 
 
     // store the old header delay so we can restore it if needed
@@ -190,6 +232,31 @@ bool CXLController::recvTimingReq(PacketPtr pkt, PortID cpu_side_port_id){
 }
 
 bool CXLController::recvTimingResp(PacketPtr pkt, PortID mem_side_port_id){
+    // [Bi-Tiered]
+    uint32_t size = pkt->getSize();
+    Addr addr = pkt->getAddr();
+    Addr pageAddr = addr & ~(pageSize - 1);
+    Addr pageAddrEnd = (addr + size - 1) & ~(pageSize - 1);
+    Addr chunkAddr = addr & ~(cxlChunkSize - 1);
+    Addr chunkAddrEnd = (addr + size - 1) & ~(cxlChunkSize - 1);
+    CXLExtraInfo* cxlInfo = dynamic_cast<gem5::CXLExtraInfo*>(pkt->senderState);
+
+    // Miss in HSPC, but Cross Pages or Chunks Access -> Large IO
+    if (pageAddr != pageAddrEnd || chunkAddr != chunkAddrEnd) {
+        for (Addr iterAddr = pageAddr; iterAddr <= pageAddrEnd; iterAddr += pageSize) {
+            handleLargeAccess(iterAddr);
+        }
+    }
+    else if (size > cxlLargeAccessThreshold) {
+        handleLargeAccess(pageAddr);
+    }
+    else if (cxlInfo->needMigration) {
+        handleLargeAccess(pageAddr);
+    }
+
+    Packet::SenderState* popped = pkt->popSenderState();
+    assert(popped == cxlInfo);
+
     // determine the source port based on the id
     RequestPort *src_port = memSidePorts[mem_side_port_id];
 
