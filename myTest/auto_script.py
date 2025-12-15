@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 import subprocess
 import sys
-import os
 from pathlib import Path
 from datetime import datetime
 
-curr_time = datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
+# version = datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
+version = "v4"
 
 # --- 設定區 ---
 GEM5_BIN = "../build/X86/gem5.opt"  # gem5 執行檔路徑
@@ -13,13 +13,13 @@ SCRIPT = "run_cxl_test.py"          # 你的模擬腳本
 
 # 定義要跑的實驗參數 (lat 0 和 256)
 TESTS = [
-    {"name": f"m5out_random_baseline_{curr_time}", "lat": "0", "mode": "RANDOM", "host_dram_size": "8GiB"},   
-    {"name": f"m5out_random_256_{curr_time}",      "lat": "256", "mode": "RANDOM", "host_dram_size": "6GiB"},
-    {"name": f"m5out_linear_baseline_{curr_time}", "lat": "0", "mode": "LINEAR", "host_dram_size": "8GiB"},
-    {"name": f"m5out_linear_256_{curr_time}",      "lat": "256", "mode": "LINEAR", "host_dram_size": "6GiB"} 
+    {"name": f"m5out_{version}_random_baseline", "lat": "0", "mode": "RANDOM", "host_dram_size": "8GiB"},   
+    {"name": f"m5out_{version}_random_256",      "lat": "256", "mode": "RANDOM", "host_dram_size": "6GiB"},
+    {"name": f"m5out_{version}_linear_baseline", "lat": "0", "mode": "LINEAR", "host_dram_size": "8GiB"},
+    {"name": f"m5out_{version}_linear_256",      "lat": "256", "mode": "LINEAR", "host_dram_size": "6GiB"} 
 ]
 
-print("🚀 冠澤學長幫你準備好了，開始批量執行 gem5 測試...")
+print("🚀 學長幫你準備好了，開始批量執行 gem5 測試...")
 print("🥐 快去買早餐吧，回來就有數據了！\n")
 
 # 確保 gem5 執行檔存在 (簡單檢查)
@@ -38,7 +38,8 @@ for i, test in enumerate(TESTS, 1):
         SCRIPT,
         f"--lat={test['lat']}",     
         f"--workload_mode={test['mode']}",
-        f"--host_dram_size={test['host_dram_size']}"
+        f"--host_dram_size={test['host_dram_size']}",
+        f"--save-dir=./{test['name']}"
     ]
     
     # 印出執行的指令供檢查
