@@ -7,6 +7,7 @@ namespace memory {
 
 CxlSSD::CxlSSD(const Params &p)
     : SimpleMemory(p),
+      stats(this),
       cxlLatency(p.cxl_latency),
       cxlBandwidth(p.cxl_bandwidth),
       cxlDramSize(p.cxl_dram_size),
@@ -32,6 +33,32 @@ CxlSSD::CxlSSD(const Params &p)
     DPRINTF(CxlSSDConfig, "  Threshold Isolated: %u\n", thresholdIsolated);
     DPRINTF(CxlSSDConfig, "  Threshold Distributed: %u\n", thresholdDistributed);
     DPRINTF(CxlSSDConfig, "  Large Access Threshold: %u\n", cxlLargeAccessThreshold);
+}
+
+CxlSSD::CxlStats::CxlStats(statistics::Group *parent)
+    : statistics::Group(parent),
+      ADD_STAT(readHitsHost, "Number of read hits in Host Cache"),
+      ADD_STAT(readHitsClassify, "Number of read hits in Classify"),
+      ADD_STAT(readHitsStore, "Number of read hits in Store"),
+      ADD_STAT(readHitsDirty, "Number of read hits in Dirty"),
+      ADD_STAT(readMisses, "Number of read misses (Flash access)"),
+      ADD_STAT(largeAccesses, "Number of large accesses redirected to Host"),
+      ADD_STAT(smallAccesses, "Number of small accesses redirected to Host"),
+      ADD_STAT(crossPageAccesses, "Number of cross accesses redirected to Host"),
+      ADD_STAT(migrations, "Number of pages migrated to Host"),
+      ADD_STAT(totalLatency, "Total latency incurred by CxlSSD"),
+      ADD_STAT(migrationLatency, "Total latency incurred by Migration"),
+      ADD_STAT(hitsHostLatency, "Total latency incurred by hitting host"),
+      ADD_STAT(hitsClassifyLatency, "Total latency incurred by hitting classify"),
+      ADD_STAT(hitsStoreLatency, "Total latency incurred by hitting store"),
+      ADD_STAT(hitsDirtyLatency, "Total latency incurred by hitting dirty"),
+      ADD_STAT(largeAccessLatency, "Total latency incurred by large access"),
+      ADD_STAT(smallAccessLatency, "Total latency incurred by small access"),
+      ADD_STAT(latencyDistribution, "Latency distribution")
+{
+    latencyDistribution
+        .init(32)
+        .flags(statistics::pdf | statistics::nozero); 
 }
 
 void CxlSSD::moveToHost(Addr pageAddr) {
@@ -108,6 +135,7 @@ Tick CxlSSD::handleCNode(Addr pageAddr, Addr chunkAddr, int chunkIdx, bool isWri
     if (cNode->access_counts[chunkIdx] > thresholdIsolated) migrate = true;
 
     if (migrate) {
+        stats.migrations++;
         moveToHost(pageAddr);
         migratedLatency = transferPenalty4KB;
     }
@@ -116,6 +144,8 @@ Tick CxlSSD::handleCNode(Addr pageAddr, Addr chunkAddr, int chunkIdx, bool isWri
         cNode->dirty_bitmap.set(chunkIdx);
         migratedLatency = cxlLatency;
     }
+
+    stats.migrationLatency += migratedLatency;
 
     return migratedLatency;
 }
@@ -127,17 +157,19 @@ Tick CxlSSD::handleSNode(Addr chunkAddr, int chunkIdx, bool isWrite) {
 
     // Handle Anomaly
     sNode->access_count++;
-
     if (sNode->access_count > thresholdIsolated) {
         Addr pageAddr = chunkAddr & ~(CXL_SSD_PAGE_SIZE - 1);
         moveToHost(pageAddr);
         migratedLatency = transferPenalty4KB + ssdLatency;
     } 
     else if (isWrite) {
+        stats.migrations++;
         moveToDirty(chunkAddr);
         storeQueue.Remove(chunkAddr);
         migratedLatency = cxlLatency;
     }
+
+    stats.migrationLatency += migratedLatency;
 
     return migratedLatency;
 }
@@ -157,19 +189,28 @@ bool CxlSSD::recvTimingReq(PacketPtr pkt) {
     
     // Cross Pages/Chunks Access -> Large IO
     if (pageAddr != pageAddrEnd || chunkAddr != chunkAddrEnd) {
+        stats.crossPageAccesses++;
         for (Addr iterAddr = pageAddr; iterAddr <= pageAddrEnd; iterAddr += CXL_SSD_PAGE_SIZE) {
             // Check Host Cache (HSPC)
             if (hostCache.Contains(iterAddr)) {
+                stats.readHitsHost++;
                 hostCache.Remove(iterAddr);
                 hostCache.Insert(iterAddr, HostCacheEntry());
+                stats.hitsHostLatency += hostLatency;
+                stats.totalLatency += hostLatency;
             }
             else {
+                stats.readMisses++;
+                stats.largeAccesses++;
                 handleLargeAccess(iterAddr);
                 addedLatency += ssdLatency;
                 addedLatency += transferPenalty4KB;
+                stats.largeAccessLatency += addedLatency;
+                stats.totalLatency += addedLatency;
             }
         }
         pkt->headerDelay += addedLatency;
+        stats.latencyDistribution.sample(addedLatency);
         DPRINTF(CxlSSD, "Cross Pages/Chunks Access: Page Addr: %#llx - %#llx, Chunk Addr: %#llx - %#llx\n", pageAddr, pageAddrEnd, chunkAddr, chunkAddrEnd);
         return SimpleMemory::recvTimingReq(pkt);
     }
@@ -177,17 +218,29 @@ bool CxlSSD::recvTimingReq(PacketPtr pkt) {
     // Check Dirty Node
     ChunkNode* dNode = dirtyQueue.Get(chunkAddr);
     if (dNode) {
+        stats.readHitsDirty++;
         addedLatency += cxlLatency;
-        pkt->headerDelay += addedLatency;
         DPRINTF(CxlSSD, "Hit in Dirty Area: %#x\n", addr);
+        pkt->headerDelay += addedLatency;
+
+        stats.totalLatency += addedLatency;
+        stats.hitsDirtyLatency += addedLatency;
+        stats.latencyDistribution.sample(addedLatency);
+
         return SimpleMemory::recvTimingReq(pkt);
     }
 
     // Check Host Cache (HSPC)
     if (hostCache.Contains(pageAddr)) {
+        stats.readHitsHost++;
         hostCache.Remove(pageAddr);
         hostCache.Insert(pageAddr, HostCacheEntry());
         DPRINTF(CxlSSD, "Hit in Host Cache: %#x\n", addr);
+
+        stats.totalLatency += hostLatency;
+        stats.hitsHostLatency += hostLatency;
+        stats.latencyDistribution.sample(hostLatency);
+
         return SimpleMemory::recvTimingReq(pkt);
     }
 
@@ -195,35 +248,55 @@ bool CxlSSD::recvTimingReq(PacketPtr pkt) {
     // Check Classify Node
     ClassifyNode* cNode = classifyQueue.Get(pageAddr);
     if (cNode) {
+        stats.readHitsClassify++;
         addedLatency += handleCNode(pageAddr, chunkAddr, chunkIdx, isWrite);
         pkt->headerDelay += addedLatency;
         DPRINTF(CxlSSD, "Hit in Classify Area: %#x\n", addr);
+
+        stats.totalLatency += addedLatency;
+        stats.hitsClassifyLatency += addedLatency;
+        stats.latencyDistribution.sample(addedLatency);
+
         return SimpleMemory::recvTimingReq(pkt);
     }
 
     // Check Store Node
     ChunkNode* sNode = storeQueue.Get(chunkAddr);
     if (sNode) {
+        stats.readHitsStore++;
         addedLatency += handleSNode(chunkAddr, chunkIdx, isWrite);
         pkt->headerDelay += addedLatency;
         DPRINTF(CxlSSD, "Hit in Store Area: %#x\n", addr);
+
+        stats.totalLatency += addedLatency;
+        stats.hitsStoreLatency += addedLatency;
+        stats.latencyDistribution.sample(addedLatency);
+
         return SimpleMemory::recvTimingReq(pkt);
     }
 
     // Cache Miss (Flash Access)
+    stats.readMisses++;
     
     // Large Access: SSD -> Host Cache
     if (pkt->getSize() > cxlLargeAccessThreshold) {
+        stats.largeAccesses++;
         handleLargeAccess(pageAddr);
         addedLatency += ssdLatency;
         addedLatency += transferPenalty4KB;
         pkt->headerDelay += addedLatency;
         DPRINTF(CxlSSD, "Miss (Large Access): %#x\n", addr);
+
+        stats.totalLatency += addedLatency;
+        stats.largeAccessLatency += addedLatency;
+        stats.latencyDistribution.sample(addedLatency);
+
         return SimpleMemory::recvTimingReq(pkt);
     } 
     
     // Small Access -> Classify Area
     std::optional<std::pair<Addr, ClassifyNode>> victim = insertToClassify(pageAddr, chunkAddr, chunkIdx, isWrite);
+    stats.smallAccesses++;
     
     // Classify Full -> Move to Store Area
     if (victim.has_value()) {
@@ -236,6 +309,10 @@ bool CxlSSD::recvTimingReq(PacketPtr pkt) {
     addedLatency += ssdLatency;
     addedLatency += cxlLatency;
     pkt->headerDelay += addedLatency;
+
+    stats.totalLatency += addedLatency;
+    stats.smallAccessLatency += addedLatency;
+    stats.latencyDistribution.sample(addedLatency);
 
     return SimpleMemory::recvTimingReq(pkt);
 }
