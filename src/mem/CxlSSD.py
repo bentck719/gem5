@@ -12,12 +12,12 @@ class CxlSSD(SimpleMemory):
     cxl_dram_size  = Param.MemorySize('2GiB', "In-device Memory Size")
 
     # SSD Parameter
-    ssd_latency = Param.Latency('10us', "Flash Read Latency")
+    ssd_latency = Param.Latency('100us', "Flash Read Latency")
     transfer_penalty4KB = Param.Latency('131ns', "Transfer Penalty for 4KB")
 
     # Host DRAM Parameter
     # Refer to SimpleMemory.py for Host DRAM Latency and Bandwidth
-    host_latency = Param.Latency('60ns', "Host DRAM  Latency")
+    host_latency = Param.Latency('80ns', "Host DRAM  Latency")
     host_dram_size  = Param.MemorySize('6GiB', "In-device Memory Size")
 
     # Anomaly Detector Parameter

@@ -9,9 +9,9 @@ def create_ycsb_cfg(filename, workload_type, workload_mode, base_addr, size):
 
     # 定義熱點 (Hotspot): 20% 的空間承受 80% 的流量
     hot_ratio = 0.2
-    
-    hot_limit = int(min(size * hot_ratio, 2**32 - base_addr))
-    total_limit = int(min(size, 2**32 - base_addr)-64)
+
+    hot_limit = int(size * hot_ratio)
+    total_limit = size
     
     block_size = 64
     
@@ -49,3 +49,8 @@ def create_ycsb_cfg(filename, workload_type, workload_mode, base_addr, size):
         # 80% 跳回熱區 (因為熱區流量大), 20% 留在冷區
         f.write(f"TRANSITION 2 1 0.8\n")
         f.write(f"TRANSITION 2 2 0.2\n")
+
+if __name__ == "__main__":
+    # 產生兩個不同的 workload config
+    create_ycsb_cfg("ycsb_workload_A.cfg", workload_type="A", workload_mode="RANDOM", base_addr=0, size=10*1024**3)
+    # create_ycsb_cfg("ycsb_workload_B.cfg", workload_type="B", workload_mode="RANDOM", base_addr=0x440000000, size=512*1024**2)

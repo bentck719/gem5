@@ -1,11 +1,11 @@
 import m5
 from m5.objects import *
-from gen_ycsb_trace import create_ycsb_cfg
 import argparse
+from gen_workload import create_ycsb_cfg
 
 parser = argparse.ArgumentParser(description="CXL SSD memory tester")
 parser.add_argument("--workload", default="A", help="YCSB Workload type (A-F)")
-parser.add_argument("--workload_mode", default="RANDOM", help="YCSB Workload mode (e.g., RANDOM, SEQ)")
+parser.add_argument("--workload_mode", default="RANDOM", help="YCSB Workload mode (e.g., RANDOM, LINEAR)")
 parser.add_argument("--size", type=int, default=10, help="Size of the memory region in GiB")
 parser.add_argument("--host_dram_size", type=str, default='6GiB', help="Size of the host DRAM in the CXL SSD")
 parser.add_argument("--lat", type=int, default=256, help="CXL large access threshold in bytes")
@@ -18,29 +18,39 @@ host_dram_size = args.host_dram_size
 size = args.size * 1024**3
 lat = args.lat
 
-cfg_filename = f"ycsb_{workload.lower()}_smart.cfg"
-create_ycsb_cfg(cfg_filename, workload, workload_mode, base_addr, size)
-
+cfg_filename = f"ycsb_workload_{workload}.cfg"
+create_ycsb_cfg(cfg_filename, workload_type=workload, workload_mode=workload_mode, base_addr=base_addr, size=size)
 cpu = TrafficGen(config_file=cfg_filename)
 
 system = System(
     cpu=cpu,
-    membus=IOXBar(width=16),
+    membus=SystemXBar(),
     mem_ranges=[AddrRange(base_addr, base_addr+size)],
     clk_domain=SrcClockDomain(clock='1GHz', voltage_domain=VoltageDomain()),
     physmem=CxlSSD(
         range = AddrRange(base_addr, base_addr+size),
-        # latency = "0",
+        latency = "80ns",
         bandwidth = "32GiB/s",
         cxl_bandwidth = "32GiB/s",
         host_dram_size = host_dram_size,
-        ssd_latency = "10us",
+        ssd_latency = "100us",
         cxl_large_access_threshold = lat
     )
 )
 
+system.membus.seriallink = SerialLink(
+    ranges=system.mem_ranges,
+    req_size=16,
+    resp_size=16,
+    num_lanes=16,
+    link_speed=32 # PCIe Gen5 32GT/s
+)
+
+sl = system.membus.seriallink
+
 system.cpu.port = system.membus.cpu_side_ports
-system.physmem.port = system.membus.mem_side_ports
+system.membus.mem_side_ports = sl.cpu_side_port
+sl.mem_side_port = system.physmem.port
 
 root = Root(full_system=False, system=system)
 root.system.mem_mode = "timing"

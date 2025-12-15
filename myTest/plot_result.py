@@ -7,11 +7,12 @@ import sys
 # ==========================================
 
 # 格式: ("圖表上的標籤", "資料夾路徑")
+time = "2025-12-14-23:09:01"
 EXPERIMENTS = [
-    ("Linear (Base)", "m5out_linear_baseline"),
-    ("Linear (Bi-Tiered)", "m5out_linear_256"),
-    ("Random (Base)", "m5out_random_baseline"),
-    ("Random (Bi-Tiered)", "m5out_random_256")
+    ("Linear (Base)", f"m5out_linear_baseline_{time}"),
+    ("Linear (Bi-Tiered)", f"m5out_linear_256_{time}"),
+    ("Random (Base)", f"m5out_random_baseline_{time}"),
+    ("Random (Bi-Tiered)", f"m5out_random_256_{time}")
     
 ]
 
@@ -122,7 +123,7 @@ def main():
     plt.tight_layout()
     
     # 存檔或顯示
-    output_img = "simulation_results.png"
+    output_img = "simulation_results_v2.png"
     plt.savefig(output_img)
     print(f"\n✅ 圖表已儲存為: {output_img}")
     plt.show()

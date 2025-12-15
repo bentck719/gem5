@@ -3,6 +3,9 @@ import subprocess
 import sys
 import os
 from pathlib import Path
+from datetime import datetime
+
+curr_time = datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
 
 # --- 設定區 ---
 GEM5_BIN = "../build/X86/gem5.opt"  # gem5 執行檔路徑
@@ -10,10 +13,10 @@ SCRIPT = "run_cxl_test.py"          # 你的模擬腳本
 
 # 定義要跑的實驗參數 (lat 0 和 256)
 TESTS = [
-    {"name": "m5out_random_baseline", "lat": "0", "mode": "RANDOM", "host_dram_size": "8GiB"},   
-    {"name": "m5out_random_256",      "lat": "256", "mode": "RANDOM", "host_dram_size": "6GiB"}
-    # {"name": "m5out_linear_baseline", "lat": "0", "mode": "LINEAR", "host_dram_size": "8GiB"},
-    # {"name": "m5out_linear_256",      "lat": "256", "mode": "LINEAR", "host_dram_size": "6GiB"} 
+    {"name": f"m5out_random_baseline_{curr_time}", "lat": "0", "mode": "RANDOM", "host_dram_size": "8GiB"},   
+    {"name": f"m5out_random_256_{curr_time}",      "lat": "256", "mode": "RANDOM", "host_dram_size": "6GiB"},
+    {"name": f"m5out_linear_baseline_{curr_time}", "lat": "0", "mode": "LINEAR", "host_dram_size": "8GiB"},
+    {"name": f"m5out_linear_256_{curr_time}",      "lat": "256", "mode": "LINEAR", "host_dram_size": "6GiB"} 
 ]
 
 print("🚀 冠澤學長幫你準備好了，開始批量執行 gem5 測試...")
@@ -26,13 +29,12 @@ if not Path(GEM5_BIN).exists():
     sys.exit(1)
 
 for i, test in enumerate(TESTS, 1):
-    print(f"[{i}/{len(TESTS)}] 正在跑 {test['name']} (Latency: {test['lat']})...")
+    print(f"[{i}/{len(TESTS)}] 正在跑 {test['name']} ({test['lat']})...")
     
     # 組合指令
     cmd = [
         GEM5_BIN,
         f"--outdir={test['name']}",
-        "--debug-flag=CxlSSDConfig",
         SCRIPT,
         f"--lat={test['lat']}",     
         f"--workload_mode={test['mode']}",
