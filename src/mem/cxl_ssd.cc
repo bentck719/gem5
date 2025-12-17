@@ -103,7 +103,10 @@ void CxlSSD::moveToStore(std::optional<std::pair<Addr, ClassifyNode>>& victim) {
     }
 }
 
-std::optional<std::pair<Addr, ClassifyNode>> CxlSSD::insertToClassify(Addr pageAddr, Addr chunkAddr, int chunkIdx, bool isWrite) {
+std::optional<std::pair<Addr, ClassifyNode>> CxlSSD::insertToClassify(const AddrPacket& info, bool isWrite) {
+    Addr pageAddr = info.pageAddr;
+    Addr chunkAddr = info.chunkAddr;
+    int chunkIdx = info.chunkIdx;
     ClassifyNode newNode;
     newNode.chunk_bitmap.set(chunkIdx);
     newNode.access_counts[chunkIdx] = 1;
@@ -123,7 +126,10 @@ void CxlSSD::handleLargeAccess(Addr pageAddr) {
 }
 
 // Classify Node: Handle anomaly and move the dirty chunk into the dirty queue.
-Tick CxlSSD::handleCNode(Addr pageAddr, Addr chunkAddr, int chunkIdx, bool isWrite) {
+Tick CxlSSD::handleCNode(const AddrPacket& info, bool isWrite) {
+    Addr pageAddr = info.pageAddr;
+    Addr chunkAddr = info.chunkAddr;
+    int chunkIdx = info.chunkIdx;
     bool migrate = false;
     Tick migratedLatency = 0;
     ClassifyNode* cNode = classifyQueue.Get(pageAddr);
@@ -151,7 +157,8 @@ Tick CxlSSD::handleCNode(Addr pageAddr, Addr chunkAddr, int chunkIdx, bool isWri
 }
 
 // Store Node: Handle anomaly and move the dirty chunk into the dirty queue.
-Tick CxlSSD::handleSNode(Addr chunkAddr, int chunkIdx, bool isWrite) {
+Tick CxlSSD::handleSNode(const AddrPacket& info, bool isWrite) {
+    Addr chunkAddr = info.chunkAddr;
     Tick migratedLatency = 0;
     ChunkNode* sNode = storeQueue.Get(chunkAddr);
 
@@ -176,19 +183,18 @@ Tick CxlSSD::handleSNode(Addr chunkAddr, int chunkIdx, bool isWrite) {
 
 bool CxlSSD::recvTimingReq(PacketPtr pkt) {
     Addr addr = pkt->getAddr();
-    uint32_t size = pkt->getSize();
     bool isWrite = pkt->isWrite();
 
-    Addr pageAddr = addr & ~(CXL_SSD_PAGE_SIZE - 1);
-    Addr pageAddrEnd = (addr + size - 1) & ~(CXL_SSD_PAGE_SIZE - 1);
-    Addr chunkAddr = addr & ~(CXL_MEM_CHUNK_SIZE - 1);
-    Addr chunkAddrEnd = (addr + size - 1) & ~(CXL_MEM_CHUNK_SIZE - 1);
-    int chunkIdx = (addr % CXL_SSD_PAGE_SIZE) / CXL_MEM_CHUNK_SIZE;
+    AddrPacket addrInfo(pkt);
+    Addr pageAddr = addrInfo.pageAddr;
+    Addr pageAddrEnd = addrInfo.pageAddrEnd;
+    Addr chunkAddr = addrInfo.chunkAddr;
+    Addr chunkAddrEnd = addrInfo.chunkAddrEnd;
     
     Tick addedLatency = 0;
     
     // Cross Pages/Chunks Access -> Large IO
-    if (pageAddr != pageAddrEnd || chunkAddr != chunkAddrEnd) {
+    if (addrInfo.isLargeAccess()) {
         stats.crossPageAccesses++;
         for (Addr iterAddr = pageAddr; iterAddr <= pageAddrEnd; iterAddr += CXL_SSD_PAGE_SIZE) {
             // Check Host Cache (HSPC)
@@ -233,8 +239,7 @@ bool CxlSSD::recvTimingReq(PacketPtr pkt) {
     // Check Host Cache (HSPC)
     if (hostCache.Contains(pageAddr)) {
         stats.readHitsHost++;
-        hostCache.Remove(pageAddr);
-        hostCache.Insert(pageAddr, HostCacheEntry());
+        hostCache.Promote(pageAddr);
         DPRINTF(CxlSSD, "Hit in Host Cache: %#x\n", addr);
 
         stats.totalLatency += hostLatency;
@@ -249,7 +254,7 @@ bool CxlSSD::recvTimingReq(PacketPtr pkt) {
     ClassifyNode* cNode = classifyQueue.Get(pageAddr);
     if (cNode) {
         stats.readHitsClassify++;
-        addedLatency += handleCNode(pageAddr, chunkAddr, chunkIdx, isWrite);
+        addedLatency += handleCNode(addrInfo, isWrite);
         pkt->headerDelay += addedLatency;
         DPRINTF(CxlSSD, "Hit in Classify Area: %#x\n", addr);
 
@@ -264,7 +269,7 @@ bool CxlSSD::recvTimingReq(PacketPtr pkt) {
     ChunkNode* sNode = storeQueue.Get(chunkAddr);
     if (sNode) {
         stats.readHitsStore++;
-        addedLatency += handleSNode(chunkAddr, chunkIdx, isWrite);
+        addedLatency += handleSNode(addrInfo, isWrite);
         pkt->headerDelay += addedLatency;
         DPRINTF(CxlSSD, "Hit in Store Area: %#x\n", addr);
 
@@ -295,7 +300,7 @@ bool CxlSSD::recvTimingReq(PacketPtr pkt) {
     } 
     
     // Small Access -> Classify Area
-    std::optional<std::pair<Addr, ClassifyNode>> victim = insertToClassify(pageAddr, chunkAddr, chunkIdx, isWrite);
+    std::optional<std::pair<Addr, ClassifyNode>> victim = insertToClassify(addrInfo, isWrite);
     stats.smallAccesses++;
     
     // Classify Full -> Move to Store Area

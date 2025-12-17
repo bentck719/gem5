@@ -1,5 +1,5 @@
-#ifndef __MEM_FIFO_QUEUE_HH__
-#define __MEM_FIFO_QUEUE_HH__
+#ifndef __MEM_GENERAL_QUEUE_HH__
+#define __MEM_GENERAL_QUEUE_HH__
 
 #include <list>
 #include <unordered_map>
@@ -12,7 +12,7 @@ namespace memory
 {
 
 template <typename KeyType, typename PayloadType>
-class FIFOQueue {
+class GeneralQueue {
 private:
   size_t max_size_;
   std::list<std::pair<KeyType, PayloadType>> fifo_list_; // List 存 Key 和 Payload (Metadata)
@@ -20,7 +20,7 @@ private:
   std::unordered_map<KeyType, ListIter> map_; // 快速查找用
 
 public:
-  explicit FIFOQueue(size_t max_size) : max_size_(max_size) {}
+  explicit GeneralQueue(size_t max_size) : max_size_(max_size) {}
 
   bool Contains(const KeyType &key) const { return map_.count(key); }
   bool IsFull() const { return map_.size() >= max_size_; }
@@ -63,9 +63,16 @@ public:
         map_.erase(it);
     }
   }
+
+  void Promote(const KeyType& key) {
+    auto it = map_.find(key);
+    if (it != map_.end()) {
+        fifo_list_.splice(fifo_list_.end(), fifo_list_, it->second);
+    }
+  }
 };
 
 } // namespace memory
 } // namespace gem5
 
-#endif // __MEM_FIFO_QUEUE_HH__
+#endif // __MEM_GENERAL_QUEUE_HH__

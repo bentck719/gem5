@@ -3,7 +3,7 @@
 
 #include "mem/simple_mem.hh"
 #include "params/CxlSSD.hh"
-#include "mem/fifo_queue.hh"
+#include "mem/general_queue.hh"
 #include <bitset>
 
 namespace gem5 {
@@ -12,6 +12,29 @@ namespace memory {
 constexpr uint32_t CXL_SSD_PAGE_SIZE = 4096;  // 4KiB
 constexpr uint32_t CXL_MEM_CHUNK_SIZE = 256;  // 256B
 constexpr uint32_t CXL_MEM_CHUNKS_PER_PAGE = CXL_SSD_PAGE_SIZE / CXL_MEM_CHUNK_SIZE;
+
+struct AddrPacket {
+    Addr pageAddr;
+    Addr pageAddrEnd;
+    Addr chunkAddr;
+    Addr chunkAddrEnd;
+    int chunkIdx;
+
+    AddrPacket(PacketPtr pkt) {
+        Addr addr = pkt->getAddr();
+        size_t size = pkt->getSize();
+
+        pageAddr = addr & ~(CXL_SSD_PAGE_SIZE - 1);
+        pageAddrEnd = (addr + size - 1) & ~(CXL_SSD_PAGE_SIZE - 1);
+        chunkAddr = addr & ~(CXL_MEM_CHUNK_SIZE - 1);
+        chunkAddrEnd = (addr + size - 1) & ~(CXL_MEM_CHUNK_SIZE - 1);
+        chunkIdx = (addr % CXL_SSD_PAGE_SIZE) / CXL_MEM_CHUNK_SIZE;
+    }
+
+    bool isLargeAccess() const {
+        return pageAddr != pageAddrEnd || chunkAddr != chunkAddrEnd;
+    }
+};
 
 struct ClassifyNode {
     std::bitset<CXL_MEM_CHUNKS_PER_PAGE> chunk_bitmap;
@@ -49,21 +72,21 @@ class CxlSSD : public SimpleMemory {
 
     const uint16_t cxlLargeAccessThreshold;
 
-    FIFOQueue<Addr, ClassifyNode> classifyQueue; // Key: Page Aligned Addr
-    FIFOQueue<Addr, ChunkNode> storeQueue;       // Key: Chunk Aligned Addr
-    FIFOQueue<Addr, ChunkNode> dirtyQueue;       // Key: Chunk Aligned Addr
+    GeneralQueue<Addr, ClassifyNode> classifyQueue; // Key: Page Aligned Addr
+    GeneralQueue<Addr, ChunkNode> storeQueue;       // Key: Chunk Aligned Addr
+    GeneralQueue<Addr, ChunkNode> dirtyQueue;       // Key: Chunk Aligned Addr
     
-    FIFOQueue<Addr, HostCacheEntry> hostCache;   // Implement LRU logic in FIFOQueue
+    GeneralQueue<Addr, HostCacheEntry> hostCache;   // Implement LRU logic in GeneralQueue
     
 
     // --- Helper ---
-    void moveToHost(Addr pageAddr); // Migration logic
+    void moveToHost(Addr chunkAddr); // Migration logic
     void moveToDirty(Addr chunkAddr);
     void moveToStore(std::optional<std::pair<Addr, ClassifyNode>>& victim);
-    std::optional<std::pair<Addr, ClassifyNode>> insertToClassify(Addr pageAddr, Addr chunkAddr, int chunkIdx, bool isWrite);
+    std::optional<std::pair<Addr, ClassifyNode>> insertToClassify(const AddrPacket& info, bool isWrite);
     void handleLargeAccess(Addr pageAddr);
-    Tick handleCNode(Addr pageAddr, Addr chunkAddr, int chunkIdx, bool isWrite);
-    Tick handleSNode(Addr chunkAddr, int chunkIdx, bool isWrite);
+    Tick handleCNode(const AddrPacket& info, bool isWrite);
+    Tick handleSNode(const AddrPacket& info, bool isWrite);
 
   public:
     using Params = CxlSSDParams;
@@ -71,6 +94,7 @@ class CxlSSD : public SimpleMemory {
 
   protected:
     bool recvTimingReq(PacketPtr pkt) override;
+
     struct CxlStats : public statistics::Group {
         CxlStats(statistics::Group *parent);
 
