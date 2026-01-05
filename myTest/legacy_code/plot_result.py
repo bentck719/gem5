@@ -106,7 +106,6 @@ def main():
     plt.tight_layout()
     plt.savefig(f"result_analysis_{version}.png")
     print(f"\n✅ 圖表已產生: result_analysis_{version}.png")
-    plt.show()
 
 if __name__ == "__main__":
     main()

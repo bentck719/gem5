@@ -85,7 +85,7 @@ def main():
     
     ax1.set_title("Request Count Breakdown\n(Where are requests served?)", fontweight='bold')
     ax1.set_ylabel("Count")
-    ax1.set_yscale('log') # 使用 Log Scale 因為數量可能差異很大
+    # ax1.set_yscale('log') # 使用 Log Scale 因為數量可能差異很大
     ax1.legend()
     ax1.grid(axis='y', linestyle='--', alpha=0.3)
     
@@ -93,7 +93,7 @@ def main():
     for i, v in enumerate(miss_flash):
         total_h = hit_host[i] + hit_internal[i] + v
         if v > 0:
-            ax1.text(i, total_h, f"Miss:\n{int(v):,}", ha='center', va='bottom', fontsize=9, fontweight='bold')
+            ax1.text(i, total_h/2, f"Miss:\n{int(v):,}", ha='center', va='bottom', fontsize=9, fontweight='bold')
 
     # ==========================================
     # 圖 2: Migration Activity (遷移次數)
@@ -147,7 +147,7 @@ def main():
 
     ax4.set_title("Total System Time Breakdown\n(Where is time spent?)", fontweight='bold')
     ax4.set_ylabel("Total Latency (Ticks)")
-    ax4.set_yscale('log')
+    # ax4.set_yscale('log')
     # 因為 Flash Access 時間通常遠大於其他，這裡通常不需要 Log Scale，直接看比例
     # 如果 Host 時間太少看不見，這本身就是一個重要的結論 (Flash dominates)
     ax4.legend(loc='upper left', fontsize='small') 
@@ -159,6 +159,8 @@ def main():
     for i, l in enumerate(labels):
         total = t_host[i] + t_internal[i] + t_mig[i] + t_flash[i]
         if total > 0:
+            print(f"  [{l}] Host: {int(t_host[i]):,}, Internal: {int(t_internal[i]):,}, Migration: {int(t_mig[i]):,}, Flash: {int(t_flash[i]):,}")
+            print(f"       Hit Host: {int(results[l]['hit_host']):,}, Hit Classify: {int(results[l]['hit_classify']):,}, Hit Store: {int(results[l]['hit_store']):,}, Hit Dirty: {int(results[l]['hit_dirty']):,}, Miss Flash: {int(results[l]['miss_flash']):,}, Migrations: {int(results[l]['migrations']):,}")
             print(f"host={t_host[i]/total * 100:.2f}%, internal={t_internal[i]/total * 100:.4f}%, mig={t_mig[i]/total * 100:.4f}%, flash={t_flash[i]/total * 100:.2f}%")
             print(f"host={t_host[i]}, internal={t_internal[i]}, mig={t_mig[i]}, flash={t_flash[i]}")
             mig_pct = (t_mig[i] / total) * 100
@@ -173,7 +175,6 @@ def main():
     output_file = f"cxl_full_analysis_{version}.png"
     plt.savefig(output_file)
     print(f"\n✅ 完整分析圖表已儲存: {output_file}")
-    plt.show()
 
 if __name__ == "__main__":
     main()
