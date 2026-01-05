@@ -106,18 +106,22 @@ class CxlSSD : public SimpleMemory {
         statistics::Scalar readMisses;        
         statistics::Scalar largeAccesses;     
         statistics::Scalar smallAccesses;
-        statistics::Scalar migrations;        
+        statistics::Scalar migrationFromCNode;        
+        statistics::Scalar migrationFromSNode;        
         statistics::Scalar crossPageAccesses;
 
         // 2. 累加器 (Average)：總共花了多少時間？(用來算平均延遲)
         statistics::Scalar totalLatency;      
-        statistics::Scalar migrationLatency;
+        statistics::Scalar migrationFromCNodeLatency;
+        statistics::Scalar migrationFromSNodeLatency;
         statistics::Scalar hitsHostLatency;
         statistics::Scalar hitsClassifyLatency;
         statistics::Scalar hitsStoreLatency;
         statistics::Scalar hitsDirtyLatency;
         statistics::Scalar largeAccessLatency;
         statistics::Scalar smallAccessLatency;
+        statistics::Scalar ssdAccessLatency;
+        statistics::Scalar blockIOLatency;
         
         // 3. 直方圖 (Histogram)：延遲的分佈圖 (論文神器！)
         // 可以看出有沒有長尾延遲 (Tail Latency)

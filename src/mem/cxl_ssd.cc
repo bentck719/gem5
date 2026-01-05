@@ -45,15 +45,21 @@ CxlSSD::CxlStats::CxlStats(statistics::Group *parent)
       ADD_STAT(largeAccesses, "Number of large accesses redirected to Host"),
       ADD_STAT(smallAccesses, "Number of small accesses redirected to Host"),
       ADD_STAT(crossPageAccesses, "Number of cross accesses redirected to Host"),
-      ADD_STAT(migrations, "Number of pages migrated to Host"),
+      ADD_STAT(migrationFromCNode, "Number of pages migrated from C to Host"),
+      ADD_STAT(migrationFromSNode, "Number of pages migrated from S to Host"),
+
       ADD_STAT(totalLatency, "Total latency incurred by CxlSSD"),
-      ADD_STAT(migrationLatency, "Total latency incurred by Migration"),
+      ADD_STAT(migrationFromCNodeLatency, "Total latency incurred by Migration from C"),
+      ADD_STAT(migrationFromSNodeLatency, "Total latency incurred by Migration from S"),
       ADD_STAT(hitsHostLatency, "Total latency incurred by hitting host"),
       ADD_STAT(hitsClassifyLatency, "Total latency incurred by hitting classify"),
       ADD_STAT(hitsStoreLatency, "Total latency incurred by hitting store"),
       ADD_STAT(hitsDirtyLatency, "Total latency incurred by hitting dirty"),
       ADD_STAT(largeAccessLatency, "Total latency incurred by large access"),
       ADD_STAT(smallAccessLatency, "Total latency incurred by small access"),
+      ADD_STAT(ssdAccessLatency, "Total latency incurred by ssd access"),
+      ADD_STAT(blockIOLatency, "Total latency incurred by block io"),
+
       ADD_STAT(latencyDistribution, "Latency distribution")
 {
     latencyDistribution
@@ -131,7 +137,6 @@ Tick CxlSSD::handleCNode(const AddrPacket& info, bool isWrite) {
     Addr chunkAddr = info.chunkAddr;
     int chunkIdx = info.chunkIdx;
     bool migrate = false;
-    Tick migratedLatency = 0;
     ClassifyNode* cNode = classifyQueue.Get(pageAddr);
 
     // Handle Anomaly
@@ -141,44 +146,44 @@ Tick CxlSSD::handleCNode(const AddrPacket& info, bool isWrite) {
     if (cNode->access_counts[chunkIdx] > thresholdIsolated) migrate = true;
 
     if (migrate) {
-        stats.migrations++;
+        stats.migrationFromCNode++;
+
         moveToHost(pageAddr);
-        migratedLatency = transferPenalty4KB;
+        
+        stats.migrationFromCNodeLatency += transferPenalty4KB;
+        stats.blockIOLatency += transferPenalty4KB;
     }
     else if (isWrite) {
         moveToDirty(chunkAddr);
         cNode->dirty_bitmap.set(chunkIdx);
-        migratedLatency = cxlLatency;
     }
 
-    stats.migrationLatency += migratedLatency;
-
-    return migratedLatency;
+    return cxlLatency;
 }
 
 // Store Node: Handle anomaly and move the dirty chunk into the dirty queue.
 Tick CxlSSD::handleSNode(const AddrPacket& info, bool isWrite) {
     Addr chunkAddr = info.chunkAddr;
-    Tick migratedLatency = 0;
     ChunkNode* sNode = storeQueue.Get(chunkAddr);
 
     // Handle Anomaly
     sNode->access_count++;
     if (sNode->access_count > thresholdIsolated) {
+        stats.migrationFromSNode++;
+
         Addr pageAddr = chunkAddr & ~(CXL_SSD_PAGE_SIZE - 1);
         moveToHost(pageAddr);
-        migratedLatency = transferPenalty4KB + ssdLatency;
+
+        stats.migrationFromSNodeLatency += transferPenalty4KB + ssdLatency;
+        stats.ssdAccessLatency += ssdLatency;
+        stats.blockIOLatency += transferPenalty4KB;
     } 
     else if (isWrite) {
-        stats.migrations++;
         moveToDirty(chunkAddr);
         storeQueue.Remove(chunkAddr);
-        migratedLatency = cxlLatency;
     }
 
-    stats.migrationLatency += migratedLatency;
-
-    return migratedLatency;
+    return cxlLatency;
 }
 
 bool CxlSSD::recvTimingReq(PacketPtr pkt) {
@@ -208,9 +213,14 @@ bool CxlSSD::recvTimingReq(PacketPtr pkt) {
             else {
                 stats.readMisses++;
                 stats.largeAccesses++;
+
                 handleLargeAccess(iterAddr);
                 addedLatency += ssdLatency;
                 addedLatency += transferPenalty4KB;
+
+                stats.ssdAccessLatency += ssdLatency;
+                stats.blockIOLatency += transferPenalty4KB;
+
                 stats.largeAccessLatency += addedLatency;
                 stats.totalLatency += addedLatency;
             }
@@ -225,6 +235,7 @@ bool CxlSSD::recvTimingReq(PacketPtr pkt) {
     ChunkNode* dNode = dirtyQueue.Get(chunkAddr);
     if (dNode) {
         stats.readHitsDirty++;
+
         addedLatency += cxlLatency;
         DPRINTF(CxlSSD, "Hit in Dirty Area: %#x\n", addr);
         pkt->headerDelay += addedLatency;
@@ -239,6 +250,7 @@ bool CxlSSD::recvTimingReq(PacketPtr pkt) {
     // Check Host Cache (HSPC)
     if (hostCache.Contains(pageAddr)) {
         stats.readHitsHost++;
+
         hostCache.Promote(pageAddr);
         DPRINTF(CxlSSD, "Hit in Host Cache: %#x\n", addr);
 
@@ -254,6 +266,7 @@ bool CxlSSD::recvTimingReq(PacketPtr pkt) {
     ClassifyNode* cNode = classifyQueue.Get(pageAddr);
     if (cNode) {
         stats.readHitsClassify++;
+
         addedLatency += handleCNode(addrInfo, isWrite);
         pkt->headerDelay += addedLatency;
         DPRINTF(CxlSSD, "Hit in Classify Area: %#x\n", addr);
@@ -269,6 +282,7 @@ bool CxlSSD::recvTimingReq(PacketPtr pkt) {
     ChunkNode* sNode = storeQueue.Get(chunkAddr);
     if (sNode) {
         stats.readHitsStore++;
+
         addedLatency += handleSNode(addrInfo, isWrite);
         pkt->headerDelay += addedLatency;
         DPRINTF(CxlSSD, "Hit in Store Area: %#x\n", addr);
@@ -286,12 +300,17 @@ bool CxlSSD::recvTimingReq(PacketPtr pkt) {
     // Large Access: SSD -> Host Cache
     if (pkt->getSize() > cxlLargeAccessThreshold) {
         stats.largeAccesses++;
+
         handleLargeAccess(pageAddr);
+        // fetch data from ssd and transfer data through block I/O
         addedLatency += ssdLatency;
         addedLatency += transferPenalty4KB;
+
         pkt->headerDelay += addedLatency;
         DPRINTF(CxlSSD, "Miss (Large Access): %#x\n", addr);
 
+        stats.ssdAccessLatency += ssdLatency;
+        stats.blockIOLatency += transferPenalty4KB;
         stats.totalLatency += addedLatency;
         stats.largeAccessLatency += addedLatency;
         stats.latencyDistribution.sample(addedLatency);
@@ -315,6 +334,7 @@ bool CxlSSD::recvTimingReq(PacketPtr pkt) {
     addedLatency += cxlLatency;
     pkt->headerDelay += addedLatency;
 
+    stats.ssdAccessLatency += ssdLatency;
     stats.totalLatency += addedLatency;
     stats.smallAccessLatency += addedLatency;
     stats.latencyDistribution.sample(addedLatency);
