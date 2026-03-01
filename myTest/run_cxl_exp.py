@@ -4,16 +4,13 @@ import argparse
 import json
 import os # used for path handling
 
-# Import the refactored traffic generation system
-from gen_workload import create_config, CommonTrafficParams
-
 parser = argparse.ArgumentParser(description="CXL SSD memory tester")
 parser.add_argument("--workload", default="A", help="YCSB Workload type (A-F)")
-parser.add_argument("--workload_mode", default="RANDOM", help="YCSB workload mode (RANDOM, LINEAR)")
+parser.add_argument("--workload_mode", default="LINEAR", help="YCSB workload mode (RANDOM, LINEAR)")
 parser.add_argument("--kind", default="ycsb", choices=["ycsb", "nvm"], 
                     help="Generator kind: 'ycsb' for YCSB workloads or 'nvm' for stride-based NVM workloads")
 parser.add_argument("--stride", type=int, default=64, help="Stride size for NVM generator (e.g., 64, 128, 4096)")
-parser.add_argument("--size", type=int, default=20, help="Size of the memory region in GiB")
+parser.add_argument("--size", type=int, default=2, help="Size of the memory region in GiB")
 parser.add_argument("--host_dram_size", type=str, default='6GiB', help="Size of the host DRAM")
 parser.add_argument("--lat", type=int, default=256, help="CXL large access threshold")
 parser.add_argument("--threshold_distributed", type=int, default=4, help="Threshold for distributed access")
@@ -36,15 +33,15 @@ elif args.kind == "nvm":
                                 f"traffic_stride_{args.stride}.cfg")
 
 # 1. Generate the Config File using the refactored factory function
-create_config(
-    filename=cfg_filename,
-    kind=args.kind,
-    base_addr=base_addr,
-    size=size_bytes,
-    stride=args.stride,                # Used only for NVM generator
-    workload_type=args.workload,       # Used only for YCSB generator
-    workload_mode=args.workload_mode   # Used by YCSB generator
-)
+# create_config(
+#     filename=cfg_filename,
+#     kind=args.kind,
+#     base_addr=base_addr,
+#     size=size_bytes,
+#     stride=args.stride,                # Used only for NVM generator
+#     workload_type=args.workload,       # Used only for YCSB generator
+#     workload_mode=args.workload_mode   # Used by YCSB generator
+# )
 
 # 2. Save Simulation Metadata
 os.makedirs(args.save_dir, exist_ok=True)
@@ -55,6 +52,8 @@ with open(os.path.join(args.save_dir, "simulation_config.json"), "w") as f:
 system = System()
 system.mem_mode = "timing"
 system.clk_domain = SrcClockDomain(clock='1GHz', voltage_domain=VoltageDomain())
+
+system.cache_line_size = 1024
 
 # Using the generated config file
 cpu = TrafficGen(config_file=cfg_filename)
@@ -85,7 +84,7 @@ print(f"Config: {cfg_filename}")
 print(f"Range: {hex(base_addr)} - {hex(base_addr + size_bytes)}")
 
 m5.instantiate()
-exit_event = m5.simulate(1_000_000_000_000)
+exit_event = m5.simulate(10_000_000_000)
 
 if exit_event.getCause() != "simulate() limit reached":
     print(f"Simulation exited due to: {exit_event.getCause()}")

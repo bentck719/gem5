@@ -73,38 +73,38 @@ def main():
     }
 
     # 4. Create Plots
-    fig, axes = plt.subplots(2, 2, figsize=(20, 20))
+    fig, axes = plt.subplots(1, 4, figsize=(40, 10))
     
     # Plot 1: Access Counts
-    plot_stacked_bar(axes[0][0], labels, access_components, 
+    plot_stacked_bar(axes[0], labels, access_components, 
                      title="Data Access Distribution (Count)", 
                      ylabel="Number of Accesses", 
                      use_log=False)
 
     # Plot 2: Latency Breakdown (Log Scale)
-    plot_stacked_bar(axes[0][1], labels, latency_components, 
+    plot_stacked_bar(axes[1], labels, latency_components, 
                      title="Latency Distribution (us) - Log Scale", 
                      ylabel="Total Latency (us)", 
                      use_log=True)
 
     # Plot 3: Latency w/o Miss (Scientific Notation)
-    plot_stacked_bar(axes[1][0], labels, latency_components_wo_miss, 
+    plot_stacked_bar(axes[2], labels, latency_components_wo_miss, 
                      title="Latency Distribution (us) w/o Cache Miss", 
                      ylabel="Total Latency (us)", 
                      use_log=False,
                      force_sci_y=True)
     
     # Plot 4: Migration Time Breakdown
-    plot_stacked_bar(axes[1][1], labels_wo_baseline, migration_components,
+    plot_stacked_bar(axes[3], labels_wo_baseline, migration_components,
                      title="Migration Distribution (Count)", 
                      ylabel="Number of Accesses", 
                      use_log=False,
                      force_sci_y=True)
     
     # 5. Finalize Layout
-    fig.suptitle(f"NVM Analysis - Version {VERSION}", fontsize=16, fontweight='bold')
+    fig.suptitle(f"NVM Analysis - Version", fontsize=16, fontweight='bold')
 
-    handles, legend_labels = axes[0][1].get_legend_handles_labels()
+    handles, legend_labels = axes[1].get_legend_handles_labels()
 
     # Legend at Top Right
     fig.legend(handles, legend_labels, loc='upper right', bbox_to_anchor=(0.99, 0.50), 

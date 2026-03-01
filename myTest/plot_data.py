@@ -93,7 +93,7 @@ def main():
                      force_sci_y=True)
     
     # 5. Finalize Layout
-    fig.suptitle(f"RANDOM/LINEAR Analysis - Version {VERSION}", fontsize=16, fontweight='bold')
+    fig.suptitle(f"RANDOM/LINEAR Analysis", fontsize=16, fontweight='bold')
 
     handles, legend_labels = axes[0][1].get_legend_handles_labels()
 

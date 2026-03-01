@@ -41,3 +41,6 @@ typings
 vmlinux
 cxl_microbench
 /myTest/legacy_figure
+replayer
+replayer_simple
+test_clwb
