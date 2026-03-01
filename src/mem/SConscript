@@ -173,3 +173,9 @@ SimObject('CxlSSD.py', sim_objects=['CxlSSD'])
 Source('cxl_ssd.cc')
 DebugFlag('CxlSSDConfig')
 DebugFlag('CxlSSD')
+
+#  CxlMemory models
+SimObject('CxlMemory.py', sim_objects=['CxlMemory'])
+Source('cxl_memory.cc')
+DebugFlag('CxlMemoryConfig')
+DebugFlag('CxlMemory')

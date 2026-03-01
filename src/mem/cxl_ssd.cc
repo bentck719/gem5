@@ -316,7 +316,7 @@ bool CxlSSD::recvTimingReq(PacketPtr pkt) {
         stats.latencyDistribution.sample(addedLatency);
 
         return SimpleMemory::recvTimingReq(pkt);
-    } 
+    }
     
     // Small Access -> Classify Area
     std::optional<std::pair<Addr, ClassifyNode>> victim = insertToClassify(addrInfo, isWrite);

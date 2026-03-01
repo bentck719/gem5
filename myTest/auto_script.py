@@ -36,20 +36,37 @@ version = "v2"
 # Common stride values: 64 (cache-line), 128 (cache-line variants), 4096 (page-aligned)
 TESTS = [
     # YCSB Workload Examples (deprecated - kept for reference)
-    {"lat": "0", "workload_mode": "RANDOM", "kind": "ycsb", "workload_type": "B", "host_dram_size": "8GiB"},   
-    {"lat": "256", "workload_mode": "RANDOM", "kind": "ycsb", "workload_type": "B", "host_dram_size": "6GiB"},
-    {"lat": "0", "workload_mode": "LINEAR", "kind": "ycsb", "workload_type": "B", "host_dram_size": "8GiB"},
-    {"lat": "256", "workload_mode": "LINEAR", "kind": "ycsb", "workload_type": "B", "host_dram_size": "6GiB"}
+    # {"lat": "0", "workload_mode": "RANDOM", "kind": "ycsb", "workload_type": "B", "host_dram_size": "8GiB"},   
+    # {"lat": "256", "workload_mode": "RANDOM", "kind": "ycsb", "workload_type": "B", "host_dram_size": "6GiB"},
+    # {"lat": "0", "workload_mode": "LINEAR", "kind": "ycsb", "workload_type": "B", "host_dram_size": "8GiB"},
+    # {"lat": "256", "workload_mode": "LINEAR", "kind": "ycsb", "workload_type": "B", "host_dram_size": "6GiB"}
 
     # Stride-based NVM workloads: stride replaces Random/Linear classification
     # {"lat": "0", "kind": "nvm", "host_dram_size": "8GiB", "stride": 256},
-    # {"lat": "256", "kind": "nvm", "host_dram_size": "6GiB", "stride": 256},
     # {"lat": "0", "kind": "nvm", "host_dram_size": "8GiB", "stride": 1024},
-    # {"lat": "256", "kind": "nvm", "host_dram_size": "6GiB", "stride": 1024},
     # {"lat": "0", "kind": "nvm", "host_dram_size": "8GiB", "stride": 4096+128},
-    # {"lat": "256", "kind": "nvm", "host_dram_size": "6GiB", "stride": 4096+128},
     # {"lat": "0", "kind": "nvm", "host_dram_size": "8GiB", "stride": 4096+1024},
-    # {"lat": "256", "kind": "nvm", "host_dram_size": "6GiB", "stride": 4096+1024}
+
+    {"lat": "256", "kind": "nvm", "host_dram_size": "6GiB", "stride": 64, "threshold_distributed": 2},
+    {"lat": "256", "kind": "nvm", "host_dram_size": "6GiB", "stride": 64, "threshold_distributed": 8},
+    {"lat": "256", "kind": "nvm", "host_dram_size": "6GiB", "stride": 64, "threshold_distributed": 12},
+
+    {"lat": "256", "kind": "nvm", "host_dram_size": "6GiB", "stride": 256, "threshold_distributed": 2},
+    {"lat": "256", "kind": "nvm", "host_dram_size": "6GiB", "stride": 256, "threshold_distributed": 8},
+    {"lat": "256", "kind": "nvm", "host_dram_size": "6GiB", "stride": 256, "threshold_distributed": 12},
+    
+    {"lat": "256", "kind": "nvm", "host_dram_size": "6GiB", "stride": 1024, "threshold_distributed": 2},
+    {"lat": "256", "kind": "nvm", "host_dram_size": "6GiB", "stride": 1024, "threshold_distributed": 8},
+    {"lat": "256", "kind": "nvm", "host_dram_size": "6GiB", "stride": 1024, "threshold_distributed": 12},
+
+    {"lat": "256", "kind": "nvm", "host_dram_size": "6GiB", "stride": 4096+128, "threshold_distributed": 2},
+    {"lat": "256", "kind": "nvm", "host_dram_size": "6GiB", "stride": 4096+128, "threshold_distributed": 8},
+    {"lat": "256", "kind": "nvm", "host_dram_size": "6GiB", "stride": 4096+128, "threshold_distributed": 12},
+
+
+    {"lat": "256", "kind": "nvm", "host_dram_size": "6GiB", "stride": 4096+1024, "threshold_distributed": 2},
+    {"lat": "256", "kind": "nvm", "host_dram_size": "6GiB", "stride": 4096+1024, "threshold_distributed": 8},
+    {"lat": "256", "kind": "nvm", "host_dram_size": "6GiB", "stride": 4096+1024, "threshold_distributed": 12}
 ]
 
 # --- 歡迎畫面 ---
@@ -90,8 +107,8 @@ with Progress(*progress_columns, console=console, expand=True) as progress:
             # YCSB naming: m5out_<version>_ycsb_<workload>_<mode>_<lat>
             test_name = f"m5out_{version}_{test['kind']}_w{test.get('workload_type', 'A')}_{test.get('workload_mode', 'RANDOM').lower()}_{test['lat']}"
         else:
-            # NVM stride-based naming: m5out_<version>_nvm_stride<stride>_<lat>
-            test_name = f"m5out_{version}_{test['kind']}_stride{test['stride']}_{test['lat']}"
+            # NVM stride-based naming: m5out_<version>_nvm_stride<stride>_<lat>_<threshold_distributed>
+            test_name = f"m5out_{version}_{test['kind']}_stride{test['stride']}_{test['lat']}_{test['threshold_distributed']}"
 
         lat_val = test['lat']
         
@@ -108,6 +125,7 @@ with Progress(*progress_columns, console=console, expand=True) as progress:
             f"--stride={test.get('stride', 64)}",
             f"--workload={test.get('workload_type', 'A')}",
             f"--kind={test['kind']}",
+            f"--threshold_distributed={test.get('threshold_distributed', 4)}",
             f"--host_dram_size={test['host_dram_size']}",
             f"--save-dir=./{test_name}"
         ]
@@ -117,14 +135,16 @@ with Progress(*progress_columns, console=console, expand=True) as progress:
         try:
             log_dir = Path(test_name)
             log_dir.mkdir(parents=True, exist_ok=True)
+
+            stdout_log = log_dir / "stdout.log"
             err_log = log_dir / "error.log"
 
-            with open(err_log, "w") as f_err:
+            with open(stdout_log, "w") as f_out, open(err_log, "w") as f_err:
                 result = subprocess.run(
                     cmd,
-                    stderr=f_err, 
-                    preexec_fn=set_mem_limit,
-                    check=False # 即使失敗也不要拋出 Python Exception，讓我們自己處理 returncode
+                    stdout=f_out, 
+                    stderr=f_err,
+                    preexec_fn=set_mem_limit
                 )
 
             duration = time.time() - start_time
