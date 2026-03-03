@@ -49,63 +49,57 @@ void handleWrite(std::map<uintptr_t, PageTracker>& page_tracker, volatile char *
     }
 
     // B. Kernel Tracking Logic (極輕量化)
-    if (optimized && write_len > 0) {
+    if (write_len > 0) {
         uintptr_t curr = start_addr;
         
         // Handle Cross-Page Writes
-        while (curr < end_addr) {
+        while (curr <= end_addr) {
             uintptr_t page_base = curr & ~4095;
             uintptr_t next_page_boundary = page_base + 4096;
             uintptr_t chunk_end = std::min(end_addr, next_page_boundary);
             
-            // 傳入 page_base 方便內部計算 offset
             page_tracker[page_base].add_range(curr, chunk_end, page_base);
-            
             curr = chunk_end; // Move to the next page chunk
         }
     }
 }
 
-void handleSync(std::map<uintptr_t, PageTracker>& page_tracker, uintptr_t start_flush, uintptr_t end_flush) {
-    uintptr_t curr_page = start_flush & ~4095;
+void handleSync(std::map<uintptr_t, PageTracker>& page_tracker) {
+    if (page_tracker.empty()) return;
+    
+    for (auto it = page_tracker.begin(); it != page_tracker.end(); ) {
+        uintptr_t curr_page = it->first;
+        uint64_t bitmap = it->second.dirty_bitmap;
 
-    // Iterate through all pages covered by the sync command
-    while (curr_page < end_flush) {
         if (optimized) {
-            if (page_tracker.count(curr_page)) {
-                uint64_t bitmap = page_tracker[curr_page].dirty_bitmap;
-                
-                // 使用硬體指令極速計算有幾個 bit 為 1 (Dirty Cache Lines 數量)
-                int dirty_lines = __builtin_popcountll(bitmap);
+            // Optimized 模式：使用 Bitmap 與 Threshold
+            int dirty_lines = __builtin_popcountll(bitmap);
 
-                // 48 條 * 64B = 3072 Bytes (3KB Threshold)
-                if (dirty_lines >= 48) { 
-                    // Degraded mode: 髒資料太多了，直接 Flush 整個 4KB 頁面
-                    for (uintptr_t p = curr_page; p < curr_page + 4096; p += 64) {
-                        _mm_clwb((void*)p);
-                    }
-                    global_full_page_flushes++;
-                } 
-                else {
-                    // Optimized mode: 精準 Flush 髒的 Cache Lines
-                    for (int i = 0; i < 64; ++i) {
-                        if (bitmap & (1ULL << i)) {
-                            _mm_clwb((void*)(curr_page + i * 64));
-                            global_partial_clwbs++;
-                        }
+            if (dirty_lines >= 48) { // 3KB Threshold
+                for (uintptr_t p = curr_page; p < curr_page + 4096; p += 64) {
+                    _mm_clwb((void*)p);
+                }
+                global_full_page_flushes++;
+            } 
+            else {
+                for (int i = 0; i < 64; ++i) {
+                    if (bitmap & (1ULL << i)) {
+                        _mm_clwb((void*)(curr_page + i * 64));
+                        global_partial_clwbs++;
                     }
                 }
-                // Clear tracking after sync
-                page_tracker.erase(curr_page);
             }
-        }
+        } 
         else {
-            // Baseline mode: always flush entire 4KB page
+            // Baseline 模式：整頁刷寫 (模擬 Linux 預設對 Dirty Page 的行為)
             for (uintptr_t p = curr_page; p < curr_page + 4096; p += 64) {
                 _mm_clwb((void*)p);
             }
+            global_full_page_flushes++;
         }
-        curr_page += 4096; // Move to the next page
+        
+        // 同步完後將該頁面從 tracker 移除
+        it = page_tracker.erase(it);
     }
     _mm_sfence(); // Ensure all clwb instructions are globally visible
 }
@@ -211,11 +205,8 @@ int main(int argc, char** argv) {
             }
         }
         else if (syscall == "msync" || syscall == "fsync" || syscall == "fdatasync") {
-            size_t flush_len = std::min(size, SIM_MEM_SIZE - rel_offset);
-            uintptr_t start_flush = (uintptr_t)target_ptr;
-            uintptr_t end_flush = start_flush + flush_len;
-            
-            handleSync(page_tracker, start_flush, end_flush);
+            std::cout << syscall << std::endl;
+            handleSync(page_tracker);
         }
     }
 
@@ -227,6 +218,12 @@ int main(int argc, char** argv) {
         std::cout << "[Optimized Mode Summary]" << std::endl;
         std::cout << "1. Full Page Flushes (>= 3KB) : " << global_full_page_flushes << " pages" << std::endl;
         std::cout << "2. Partial CLWBs (< 3KB)      : " << global_partial_clwbs << " cache lines" << std::endl;
+        std::cout << "========================================" << std::endl;
+    }
+    else {
+        std::cout << "========================================" << std::endl;
+        std::cout << "[Baseline Mode Summary]" << std::endl;
+        std::cout << "1. Full Page Flushes: " << global_full_page_flushes << " pages" << std::endl;
         std::cout << "========================================" << std::endl;
     }
 
