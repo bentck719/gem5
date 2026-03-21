@@ -67,8 +67,14 @@ namespace memory
  */
 class SimpleMemory : public AbstractMemory
 {
-
-  private:
+  protected:
+    Tick recvAtomic(PacketPtr pkt);
+    Tick recvAtomicBackdoor(PacketPtr pkt, MemBackdoorPtr &_backdoor);
+    void recvFunctional(PacketPtr pkt);
+    void recvMemBackdoorReq(const MemBackdoorReq &req,
+            MemBackdoorPtr &backdoor);
+    virtual bool recvTimingReq(PacketPtr pkt);
+    void recvRespRetry();
 
     /**
      * A deferred packet stores a packet along with its scheduled
@@ -191,15 +197,6 @@ class SimpleMemory : public AbstractMemory
     Port &getPort(const std::string &if_name,
                   PortID idx=InvalidPortID) override;
     void init() override;
-
-  protected:
-    Tick recvAtomic(PacketPtr pkt);
-    Tick recvAtomicBackdoor(PacketPtr pkt, MemBackdoorPtr &_backdoor);
-    void recvFunctional(PacketPtr pkt);
-    void recvMemBackdoorReq(const MemBackdoorReq &req,
-            MemBackdoorPtr &backdoor);
-    bool recvTimingReq(PacketPtr pkt);
-    void recvRespRetry();
 };
 
 } // namespace memory

@@ -1,62 +1,68 @@
 #ifndef __MEM_CXL_SSD_HH__
 #define __MEM_CXL_SSD_HH__
 
+#include <vector>
+#include <cstdint>
 #include "mem/simple_mem.hh"
-#include "params/CxlSSD.hh"
-#include "mem/fifo_queue.hh"
-#include <bitset>
+#include "params/CxlSSD.hh" 
+#include "base/statistics.hh"
 
 namespace gem5 {
 namespace memory {
 
-#define CXL_SSD_PAGE_SIZE       4096  // 4KiB
-#define CXL_MEM_CHUNK_SIZE      256   // 256B
-#define CXL_MEM_CHUNKS_PER_PAGE 16
+constexpr size_t PAGE_SIZE = 4096;      // 4KiB
+constexpr size_t CACHELINE_SIZE = 64;   // 64 Bytes
 
-struct ClassifyNode {
-    std::bitset<16> chunk_bitmap;
-    std::vector<uint8_t> access_counts;
-    ClassifyNode() : access_counts(16, 0) {}
+// 極致輕量的 Metadata Entry (模擬 SSD 內部的 SRAM Tag Store)
+struct SsdMetadataEntry {
+    uint64_t tag = 0;           // 標籤 (Address Tag)
+    uint64_t bitmap = 0;        // 64-bit Bitmap (追蹤哪個 64B 被修改)
+    bool valid = false;         // 該 Entry 是否有效
+    Tick lastTick = 0;          // 紀錄最後存取時間，用於 LRU 替換策略
 };
 
-struct ChunkNode {
-    uint8_t access_count;
-    ChunkNode() : access_count(0) {}
-};
-
-struct HostCacheEntry {};
-
-class CxlSSD : public SimpleMemory // 繼承 SimpleMemory 以支援 TrafficGen
-{
+// 統一類別名稱為 CxlSSD
+class CxlSSD : public SimpleMemory {
   private:
     // Cxl Parameter
-    const Tick cxlLatency;
-    const double cxlBandwidth;
-    const int cxlDramSize;
+    const Tick cxlLinkLatency;
 
     // SSD Parameter
-    const Tick ssdLatency;
+    const Tick nandFlashReadLatency;
+    const Tick nandFlashWriteLatency;
+    const double nandFlashBandwidth;
+    const Tick nandFlashTransferLatency; // 2 GiB/s
+    const Tick modifyLatency;
+    Tick readModifyWriteLatency;
 
-    // Host DRAM Parameter
-    const Tick hostLatency;
-    const int hostDramSize;
+    // Cache Architecture Parameters
+    const size_t byteWriteBufferSize;
+    const uint32_t numWays;
+    const uint32_t numSets;
 
-    // Anomaly Detector Parameter
-    const uint8_t thresholdIsolated;
-    const uint8_t thresholdDistributed;
+    uint32_t setShift;
+    uint64_t setMask;
+    uint32_t tagShift;
 
-    const Tick transferPenalty4KB = 131000; // 131 ns
-    const Tick transfetPenalty256B = 8000;  // 8ns
-  
-    FIFOQueue<Addr, ClassifyNode> classifyQueue; // Key: Page Aligned Addr
-    FIFOQueue<Addr, ChunkNode> storeQueue;       // Key: Chunk Aligned Addr
-    FIFOQueue<Addr, ChunkNode> dirtyQueue;       // Key: Chunk Aligned Addr
+    // metadata_cache[NUM_SETS][WAYS]
+    std::vector<std::vector<SsdMetadataEntry>> metadataCache;
+    
+    struct CxlSSDStats : public statistics::Group {
+        CxlSSDStats(CxlSSD &cxl_ssd);
+        statistics::Scalar statBufferHits;       
+        statistics::Scalar statBufferMisses;     
+        statistics::Scalar statEvictions;      // 踢出舊 Page 的次數
+        // 為 Bitmap 雙路徑專屬的統計數據
+        statistics::Scalar statRmwOperations;
+        statistics::Scalar statByteWrite;
+        statistics::Scalar statBlockWrite;
+        statistics::Scalar statBlockRead;
+        
 
-    FIFOQueue<Addr, HostCacheEntry> hostCache;   // Implement LRU logic in FIFOQueue
-
-    // --- Helper ---
-    void moveToHost(Addr pageAddr); // Migration logic
-    Tick anomalyHandler(Addr pageAddr, Addr chunkAddr, int chunkIdx, ClassifyNode* cNode, ChunkNode* sNode);
+        statistics::Scalar statByteWriteLatency;
+        statistics::Scalar statBlockWriteLatency;
+        statistics::Scalar statBlockReadLatency;
+    } stats;
 
   public:
     using Params = CxlSSDParams;
@@ -64,6 +70,11 @@ class CxlSSD : public SimpleMemory // 繼承 SimpleMemory 以支援 TrafficGen
 
   protected:
     bool recvTimingReq(PacketPtr pkt) override;
+    
+    // 內部 Helper Functions (方便實作 LRU)
+    uint32_t extractSetIdx(Addr addr) const;
+    uint64_t extractTag(Addr addr) const;
+    uint32_t extractCachelineIdx(Addr addr) const;
 };
 
 } // namespace memory
