@@ -7,7 +7,7 @@ namespace gem5 {
 namespace memory {
 
 #define FTL_BASE_ADDR  0x200000000ULL
-#define DRAM_BASE_ADDR 0x240000000ULL
+#define DRAM_BASE_ADDR 0x400000000ULL
 
 CxlSSD::CxlSSD(const Params &p)
     : SimpleMemory(p),
@@ -198,6 +198,7 @@ bool CxlSSD::recvTimingReq(PacketPtr pkt) {
             else {
                 dynamicLatency += readModifyWriteLatency;
                 stats.statBlockWrite++;
+                stats.statRmwOperations++;
                 stats.statBlockWriteLatency += dynamicLatency;
             }
 
