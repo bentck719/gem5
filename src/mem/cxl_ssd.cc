@@ -53,7 +53,9 @@ CxlSSD::CxlSSDStats::CxlSSDStats(CxlSSD &cxl_ssd)
 
       ADD_STAT(statByteWriteLatency, statistics::units::Count::get(), "Total Latency for Byte Writes"),
       ADD_STAT(statBlockWriteLatency, statistics::units::Count::get(), "Total Latency for Block Writes"),
-      ADD_STAT(statBlockReadLatency, statistics::units::Count::get(), "Total Latency for Block Read")
+      ADD_STAT(statBlockReadLatency, statistics::units::Count::get(), "Total Latency for Block Read"),
+
+      ADD_STAT(statSyncCmd, statistics::units::Count::get(), "Flag for Sync Smd")
 {
 }
 
@@ -83,6 +85,20 @@ bool CxlSSD::recvTimingReq(PacketPtr pkt) {
     }
 
     Addr paddr = pkt->getAddr();
+
+    bool is_sync_cmd = false;
+    if (paddr == (DRAM_BASE_ADDR - 64) && pkt->isWrite() && pkt->hasData()) {
+        
+        // 取得封包資料的指標 (讀取為 8-bit unsigned integer)
+        const uint8_t* pkt_data = pkt->getConstPtr<uint8_t>();
+        
+        // 檢查 Payload 的第一個 byte 是否為 Magic Number (0xFF)
+        if (pkt_data[0] == 0xFF) {
+            is_sync_cmd = true;
+            stats.statSyncCmd++;
+        }
+    }
+
     bool is_byte_io  = (paddr >= DRAM_BASE_ADDR);
     bool is_block_io = (paddr >= FTL_BASE_ADDR && paddr < DRAM_BASE_ADDR);
 
@@ -121,95 +137,114 @@ bool CxlSSD::recvTimingReq(PacketPtr pkt) {
         assert(pkt->isResponse());
         Tick dynamicLatency = 0;
 
-        uint32_t setIdx = extractSetIdx(relative_offset);
-        uint64_t tag    = extractTag(relative_offset);
-        uint32_t clIdx  = extractCachelineIdx(relative_offset);
-
-        // Path A: CXL.mem 微粒度寫入 (Bitmap 更新)
-        if (is_byte_io) {
-            bool hit = false;
-            int hitWay = -1;
-            int emptyWay = -1;
-            int lruWay = 0;
-            Tick oldestTick = curTick();
-
-            // 尋找 Set 內部的 Ways
-            for (int w = 0; w < numWays; ++w) {
-                if (metadataCache[setIdx][w].valid) {
-                    if (metadataCache[setIdx][w].tag == tag) {
-                        hit = true;
-                        hitWay = w;
-                        break;
-                    }
-                    if (metadataCache[setIdx][w].lastTick < oldestTick) {
-                        oldestTick = metadataCache[setIdx][w].lastTick;
-                        lruWay = w;
-                    }
-                } 
-                else if (emptyWay == -1) {
-                    emptyWay = w; // 紀錄第一個空位
-                }
-            }
-
-            // Hit: O(1) 更新 Bitmap
-            if (hit) {
-                stats.statBufferHits++;
-                metadataCache[setIdx][hitWay].bitmap |= (1ULL << clIdx);
-                metadataCache[setIdx][hitWay].lastTick = curTick();
-                dynamicLatency += cxlLinkLatency + 
-                                bandwidth*CACHELINE_SIZE;
-            }
-            // Miss: 觸發 LRU 替換與 SSD Fetch
-            else {
-                stats.statBufferMisses++;
-                int targetWay = (emptyWay != -1) ? emptyWay : lruWay;
-
-                // Page Eviction
-                if (metadataCache[setIdx][targetWay].valid) {
-                    stats.statEvictions++;
-                    uint64_t victim_bitmap = metadataCache[setIdx][targetWay].bitmap;
-                    
-                    // 如果被踢出的 Page 含有髒資料，計算 RMW 延遲懲罰
-                    if (victim_bitmap != 0) {
-                        stats.statRmwOperations++;
-                        dynamicLatency += readModifyWriteLatency;
+        if (is_sync_cmd) {
+            int flushCount = 0;
+            for (int s = 0; s < numSets; ++s) {
+                for (int w = 0; w < numWays; ++w) {
+                    // 如果這個 Cacheline 有效且含有髒資料
+                    if (metadataCache[s][w].valid && metadataCache[s][w].bitmap != 0) {
+                        dynamicLatency += readModifyWriteLatency; // 結算 RMW 代價
+                        flushCount++;
+                        metadataCache[s][w].valid = false;
+                        metadataCache[s][w].bitmap = 0;
                     }
                 }
-                
-                metadataCache[setIdx][targetWay].valid = true;
-                metadataCache[setIdx][targetWay].tag = tag;
-                metadataCache[setIdx][targetWay].bitmap = (1ULL << clIdx); // 設定新的 Dirty bit
-                metadataCache[setIdx][targetWay].lastTick = curTick();
             }
-            stats.statByteWriteLatency += dynamicLatency;
-            stats.statByteWrite++;
+            stats.statRmwOperations += flushCount;
+            stats.statEvictions += flushCount;
+            stats.statBlockWriteLatency += dynamicLatency; // 算入總硬體延遲
         }
-        // Path B: Block I/O 寫入 (直接寫回 FTL)
-        else if (is_block_io) {
-            // block read
-            if (pkt->isRead()) {
-                dynamicLatency += nandFlashReadLatency + 
-                                nandFlashTransferLatency +
-                                bandwidth * PAGE_SIZE; // block transfer back to host
-                stats.statBlockRead++;
-                stats.statBlockReadLatency += dynamicLatency;
+        else {
+            uint32_t setIdx = extractSetIdx(relative_offset);
+            uint64_t tag    = extractTag(relative_offset);
+            uint32_t clIdx  = extractCachelineIdx(relative_offset);
+    
+            // Path A: CXL.mem 微粒度寫入 (Bitmap 更新)
+            if (is_byte_io) {
+                bool hit = false;
+                int hitWay = -1;
+                int emptyWay = -1;
+                int lruWay = 0;
+                Tick oldestTick = curTick();
+    
+                // 尋找 Set 內部的 Ways
+                for (int w = 0; w < numWays; ++w) {
+                    if (metadataCache[setIdx][w].valid) {
+                        if (metadataCache[setIdx][w].tag == tag) {
+                            hit = true;
+                            hitWay = w;
+                            break;
+                        }
+                        if (metadataCache[setIdx][w].lastTick < oldestTick) {
+                            oldestTick = metadataCache[setIdx][w].lastTick;
+                            lruWay = w;
+                        }
+                    } 
+                    else if (emptyWay == -1) {
+                        emptyWay = w; // 紀錄第一個空位
+                    }
+                }
+    
+                dynamicLatency += cxlLinkLatency + bandwidth*CACHELINE_SIZE;
+    
+                // Hit: O(1) 更新 Bitmap
+                if (hit) {
+                    stats.statBufferHits++;
+                    metadataCache[setIdx][hitWay].bitmap |= (1ULL << clIdx);
+                    metadataCache[setIdx][hitWay].lastTick = curTick();
+                }
+                // Miss: 觸發 LRU 替換與 SSD Fetch
+                else {
+                    stats.statBufferMisses++;
+                    int targetWay = (emptyWay != -1) ? emptyWay : lruWay;
+    
+                    // Page Eviction
+                    if (metadataCache[setIdx][targetWay].valid) {
+                        stats.statEvictions++;
+                        uint64_t victim_bitmap = metadataCache[setIdx][targetWay].bitmap;
+                        
+                        // 如果被踢出的 Page 含有髒資料，計算 RMW 延遲懲罰
+                        if (victim_bitmap != 0) {
+                            stats.statRmwOperations++;
+                            dynamicLatency += readModifyWriteLatency;
+                        }
+                    }
+                    
+                    metadataCache[setIdx][targetWay].valid = true;
+                    metadataCache[setIdx][targetWay].tag = tag;
+                    metadataCache[setIdx][targetWay].bitmap = (1ULL << clIdx); // 設定新的 Dirty bit
+                    metadataCache[setIdx][targetWay].lastTick = curTick();
+                }
+                stats.statByteWriteLatency += dynamicLatency;
+                stats.statByteWrite++;
             }
-            // block write
-            else {
-                dynamicLatency += readModifyWriteLatency;
-                stats.statBlockWrite++;
-                stats.statRmwOperations++;
-                stats.statBlockWriteLatency += dynamicLatency;
-            }
-
-            // Since the read has fetched or the read has flushed, 
-            // if the metadataCache has data in the same page, 
-            // it has to reset it to empty;
-            for (int w = 0; w < numWays; ++w) {
-                if (metadataCache[setIdx][w].valid) {
-                    if (metadataCache[setIdx][w].tag == tag) {
-                        metadataCache[setIdx][w].valid = false;
-                        break;
+            // Path B: Block I/O 寫入 (直接寫回 FTL)
+            else if (is_block_io) {
+                // block read
+                if (pkt->isRead()) {
+                    dynamicLatency += nandFlashReadLatency + 
+                                    nandFlashTransferLatency +
+                                    bandwidth * PAGE_SIZE; // block transfer back to host
+                    stats.statBlockRead++;
+                    stats.statBlockReadLatency += dynamicLatency;
+                }
+                // block write
+                else {
+                    dynamicLatency += readModifyWriteLatency;
+                    stats.statBlockWrite++;
+                    stats.statRmwOperations++;
+                    stats.statBlockWriteLatency += dynamicLatency;
+                }
+    
+                // Since the read has fetched or the read has flushed, 
+                // if the metadataCache has data in the same page, 
+                // it has to reset it to empty;
+                for (int w = 0; w < numWays; ++w) {
+                    if (metadataCache[setIdx][w].valid) {
+                        if (metadataCache[setIdx][w].tag == tag) {
+                            metadataCache[setIdx][w].valid = false;
+                            break;
+                        }
                     }
                 }
             }
@@ -229,6 +264,7 @@ bool CxlSSD::recvTimingReq(PacketPtr pkt) {
         if (!retryResp && !dequeueEvent.scheduled()) {
             schedule(dequeueEvent, packetQueue.back().tick);
         }
+
     } 
     else {
         pendingDelete.reset(pkt);

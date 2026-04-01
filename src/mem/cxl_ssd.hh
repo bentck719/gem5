@@ -57,12 +57,13 @@ class CxlSSD : public SimpleMemory {
         statistics::Scalar statByteWrite;
         statistics::Scalar statBlockWrite;
         statistics::Scalar statBlockRead;
-        
 
         statistics::Scalar statByteWriteLatency;
         statistics::Scalar statBlockWriteLatency;
         statistics::Scalar statBlockReadLatency;
-    } stats;
+
+        statistics::Scalar statSyncCmd;
+      } stats;
 
   public:
     using Params = CxlSSDParams;
